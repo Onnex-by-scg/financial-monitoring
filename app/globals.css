@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+/* ONNEX by SCG corporate identity (see lib/format.ts CI for the source of each value). */
+@theme inline {
+  --font-sans: "Lufga", var(--font-noto-thai), ui-sans-serif, system-ui, sans-serif;
+
+  --color-brand: #034ea2; /* Cobalt Blue */
+  --color-brand-dark: #023b7a;
+  --color-brand-soft: #e6eef8;
+  --color-aqua: #03bfd7; /* Aqua Blue */
+  --color-ci-green: #26d07c;
+  --color-ci-red: #d6001c;
+  --color-ink: #0b1f3a;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+}
+
+/* The CI bar (cobalt → aqua → mint). */
+.ci-bar {
+  background: linear-gradient(90deg, #034ea2 0%, #1c7fd6 40%, #03bfd7 75%, #3ee8b5 100%);
+}
+
+/* Plotly charts that filter on click. */
+.plot-clickable .nsewdrag,
+.plot-clickable .slice path {
+  cursor: pointer !important;
+}
+
+/* ---- Motion ----
+   Content rises into place on first load / tab switch (staggered with --d), bars glide to new sizes, and
+   banners slide in. Everything is turned off for people who ask their system for reduced motion. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise-in {
+  animation: rise-in 520ms cubic-bezier(0.22, 1, 0.36, 1) backwards; /* not "both": once done, no transform is left to trap popups */
+  animation-delay: var(--d, 0ms);
+}
+.slide-down {
+  animation: slide-down 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+/* Width / flex changes of data bars (KPI share bars, ranked bars). */
+.bar-anim {
+  transition:
+    width 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    flex-grow 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 250ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+  }
+}

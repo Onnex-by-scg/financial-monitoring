@@ -1,0 +1,884 @@
+{
+  "info": {
+    "_postman_id": "359c090d-3474-4b10-bb60-7ddca677c050",
+    "name": "SCG NetSuite Integration (RESTlet, OAuth 1.0 TBA)",
+    "description": "Read-only requests for SCG's NetSuite integration RESTlet (see netsuite_api_docs/).\n\n**Setup**\n1. Import this collection and `NetSuite.postman_environment.json`.\n2. In the environment, fill `account_id` (e.g. `1234567_SB1`) and the four keys: `consumer_key`, `consumer_secret`, `token_id`, `token_secret`. Put the keys in **Current value** only, so they stay on your machine and aren't synced or exported.\n3. Select the environment and run **00 Connection test → Subsidiary list** first.\n\n**Auth** is set once on the collection: OAuth 1.0, HMAC-SHA256, realm = `account_id`. Every request inherits it.\n`account_host` (`1234567-sb1`) is derived from `account_id` by the collection pre-request script.\n\n**Responses** are always HTTP 200. The real result is `status` / `code` / `error` in the body; the collection tests check it.\nLists return `data: { total, per_page, current_page, last_page, data: [...] }`. Dates are DD/MM/YYYY.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "oauth1",
+    "oauth1": [
+      {
+        "key": "signatureMethod",
+        "value": "HMAC-SHA256",
+        "type": "string"
+      },
+      {
+        "key": "version",
+        "value": "1.0",
+        "type": "string"
+      },
+      {
+        "key": "realm",
+        "value": "{{account_id}}",
+        "type": "string"
+      },
+      {
+        "key": "consumerKey",
+        "value": "{{consumer_key}}",
+        "type": "string"
+      },
+      {
+        "key": "consumerSecret",
+        "value": "{{consumer_secret}}",
+        "type": "string"
+      },
+      {
+        "key": "token",
+        "value": "{{token_id}}",
+        "type": "string"
+      },
+      {
+        "key": "tokenSecret",
+        "value": "{{token_secret}}",
+        "type": "string"
+      },
+      {
+        "key": "addParamsToHeader",
+        "value": true,
+        "type": "boolean"
+      },
+      {
+        "key": "addEmptyParamsToSign",
+        "value": false,
+        "type": "boolean"
+      },
+      {
+        "key": "includeBodyHash",
+        "value": false,
+        "type": "boolean"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// account_id 1234567_SB1 -> realm 1234567_SB1, host 1234567-sb1.restlets.api.netsuite.com",
+          "const id = (pm.variables.get('account_id') || '').trim().toUpperCase().replace(/-/g, '_');",
+          "if (!id) throw new Error('Set account_id in the environment (e.g. 1234567_SB1).');",
+          "for (const k of ['consumer_key', 'consumer_secret', 'token_id', 'token_secret']) {",
+          "  if (!pm.variables.get(k)) throw new Error(`Set ${k} in the environment (Current value).`);",
+          "}",
+          "pm.variables.set('account_id', id);",
+          "pm.variables.set('account_host', id.toLowerCase().replace(/_/g, '-'));"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// NetSuite answers HTTP 200 even for errors; the result is in the body.",
+          "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+          "let body;",
+          "try { body = pm.response.json(); } catch (e) { body = null; }",
+          "pm.test('JSON body', () => pm.expect(body, pm.response.text().slice(0, 200)).to.be.an('object'));",
+          "if (body) {",
+          "  const err = body.error ? `${body.error.code || ''}: ${body.error.message || JSON.stringify(body.error)}` : '';",
+          "  pm.test('status = success', () => pm.expect(body.status, err).to.eql('success'));",
+          "  const d = body.data;",
+          "  if (d && Array.isArray(d.data)) console.log(`total=${d.total} page=${d.current_page}/${d.last_page} rows=${d.data.length}`);",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "script_id",
+      "value": "customscript_int_api",
+      "description": "RESTlet for endpoints #01–#41"
+    },
+    {
+      "key": "script_id_2",
+      "value": "customscript_int_api_2",
+      "description": "RESTlet for endpoints #42 and later"
+    },
+    {
+      "key": "deploy_id",
+      "value": "1"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 Connection test",
+      "item": [
+        {
+          "name": "Subsidiary list",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=subsidiary&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "subsidiary"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                }
+              ]
+            },
+            "description": "Reference list `subsidiary`. Fields: ns_internal_id, name (and full_name / parent for org lists)."
+          },
+          "response": []
+        }
+      ],
+      "description": "Smallest read-only call. If this passes, the account ID, keys and RESTlet deployment all work."
+    },
+    {
+      "name": "01 Reference lists",
+      "item": [
+        {
+          "name": "Department list",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=department&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "department"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                }
+              ]
+            },
+            "description": "Reference list `department`. Fields: ns_internal_id, name (and full_name / parent for org lists)."
+          },
+          "response": []
+        },
+        {
+          "name": "Class list",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=class&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "class"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                }
+              ]
+            },
+            "description": "Reference list `class`. Fields: ns_internal_id, name (and full_name / parent for org lists)."
+          },
+          "response": []
+        },
+        {
+          "name": "Location list",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=location&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "location"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                }
+              ]
+            },
+            "description": "Reference list `location`. Fields: ns_internal_id, name (and full_name / parent for org lists)."
+          },
+          "response": []
+        },
+        {
+          "name": "Chart of accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=account&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "account"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                }
+              ]
+            },
+            "description": "Reference list `account`. Fields: ns_internal_id, name (and full_name / parent for org lists)."
+          },
+          "response": []
+        },
+        {
+          "name": "Currency list",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=currency&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "currency"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                }
+              ]
+            },
+            "description": "Reference list `currency`. Fields: ns_internal_id, name (and full_name / parent for org lists)."
+          },
+          "response": []
+        },
+        {
+          "name": "Terms list",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=term&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "term"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                }
+              ]
+            },
+            "description": "Reference list `term`. Fields: ns_internal_id, name (and full_name / parent for org lists)."
+          },
+          "response": []
+        },
+        {
+          "name": "Customer category list",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=customercategory&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "customercategory"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                }
+              ]
+            },
+            "description": "Reference list `customercategory`. Fields: ns_internal_id, name (and full_name / parent for org lists)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 Accounts receivable",
+      "item": [
+        {
+          "name": "Customers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=customer&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "customer"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                },
+                {
+                  "key": "query[external_cust_code][0]",
+                  "value": "",
+                  "description": "Customer code. Add [1], [2]… for several.",
+                  "disabled": true
+                },
+                {
+                  "key": "query[company_name]",
+                  "value": "",
+                  "description": "Customer name",
+                  "disabled": true
+                },
+                {
+                  "key": "query[datefrom]",
+                  "value": "",
+                  "description": "Created from (date format not stated in the doc; try DD/MM/YYYY)",
+                  "disabled": true
+                },
+                {
+                  "key": "query[dateto]",
+                  "value": "",
+                  "description": "Created to",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "#01 Query Customer. Includes ns_internal_id_credit_term and ns_credit_limit."
+          },
+          "response": []
+        },
+        {
+          "name": "Invoices",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=invoice&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "invoice"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                },
+                {
+                  "key": "query[ns_external_id][0]",
+                  "value": "",
+                  "description": "Invoice external ID. Add [1], [2]… for several.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "#07 Query Invoice. Note: no due date, amount remaining or status in this response."
+          },
+          "response": []
+        },
+        {
+          "name": "Customer deposits",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id}}&deploy={{deploy_id}}&service_type=customerdeposit&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "customerdeposit"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                },
+                {
+                  "key": "query[ns_external_id][0]",
+                  "value": "",
+                  "description": "Deposit external ID",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "#08 Query Customer Deposit."
+          },
+          "response": []
+        },
+        {
+          "name": "Invoice from SO (LHS)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id_2}}&deploy={{deploy_id}}&service_type=invoicefromso_lhs&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id_2}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "invoicefromso_lhs"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                },
+                {
+                  "key": "query[inv_ns_internal_id]",
+                  "value": "",
+                  "description": "One NetSuite internal ID",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "#46. Has inv_due_date, inv_status, inv_term_name and payment_query. LHS-specific."
+          },
+          "response": []
+        },
+        {
+          "name": "Customer payments from invoice (LHS)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent-x",
+                "value": "SuiteScript-Call"
+              }
+            ],
+            "url": {
+              "raw": "https://{{account_host}}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script={{script_id_2}}&deploy={{deploy_id}}&service_type=customerpayment_from_invoice_lhs&query[current_page]=1",
+              "protocol": "https",
+              "host": [
+                "{{account_host}}",
+                "restlets",
+                "api",
+                "netsuite",
+                "com"
+              ],
+              "path": [
+                "app",
+                "site",
+                "hosting",
+                "restlet.nl"
+              ],
+              "query": [
+                {
+                  "key": "script",
+                  "value": "{{script_id_2}}"
+                },
+                {
+                  "key": "deploy",
+                  "value": "{{deploy_id}}"
+                },
+                {
+                  "key": "service_type",
+                  "value": "customerpayment_from_invoice_lhs"
+                },
+                {
+                  "key": "query[current_page]",
+                  "value": "1",
+                  "description": "Page number. Up to 1000 records per page; see data.last_page in the response."
+                },
+                {
+                  "key": "query[payment_ns_internal_id]",
+                  "value": "",
+                  "description": "One NetSuite internal ID",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "#47. apply_inv_items shows the amount paid per invoice. LHS-specific."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

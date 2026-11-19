@@ -1,0 +1,7 @@
+# Packages allowed to run install scripts (pnpm blocks them by default).
+#  - better-sqlite3: downloads/builds the native SQLite driver used by Prisma (lib/db.ts)
+#  - prisma, @prisma/engines: set up the Prisma CLI's engines
+allowBuilds:
+  '@prisma/engines': true
+  better-sqlite3: true
+  prisma: true

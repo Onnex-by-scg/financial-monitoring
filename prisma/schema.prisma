@@ -1,0 +1,98 @@
+// AR data pulled from PEAK and NetSuite by the sync service (lib/sync/). The dashboard reads only from here.
+// The database file lives in .peak/ (gitignored, owner-only), next to the saved credentials.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// Latest successful pull for one dashboard tab (a PEAK company or a NetSuite connection).
+model ArSnapshot {
+  entityId     String      @id
+  provider     String // "peak" | "netsuite"
+  /// Hash of the credentials the data was read with. Data read with other keys is never shown.
+  credKey      String
+  entityName   String
+  businessName String?
+  source       String // ArSource
+  /// Date the aging is measured against (Bangkok), yyyy-MM-dd.
+  asOf         String
+  fetchedAt    DateTime
+  /// JSON: ProjectInfo
+  projects     String
+  /// JSON: string[]
+  warnings     String
+  /// JSON: ArDebug (API calls and raw fields, for the Debug panels)
+  debug        String
+  invoices     ArInvoice[]
+}
+
+/// One outstanding invoice in a snapshot (amounts already in THB).
+model ArInvoice {
+  id           Int        @id @default(autoincrement())
+  entityId     String
+  code         String
+  contactCode  String
+  contactName  String
+  reference    String
+  issuedDate   String
+  dueDate      String
+  netAmount    Float
+  remainAmount Float
+  link         String?
+  /// JSON: { code, name, percent }[]
+  projects     String
+  snapshot     ArSnapshot @relation(fields: [entityId], references: [entityId], onDelete: Cascade)
+
+  @@index([entityId])
+}
+
+/// Every pull: when, why, how it went.
+model SyncRun {
+  id          Int       @id @default(autoincrement())
+  entityId    String
+  provider    String
+  /// "ar" (outstanding invoices) | "pnl" (trial balance for Financial Performance)
+  kind        String    @default("ar")
+  /// "schedule" | "refresh" | "first-load" | "api"
+  trigger     String
+  /// "running" | "ok" | "error" | "skipped"
+  status      String
+  /// NetSuite AR: "full" | "update"; P&L: the year read, e.g. "2026"
+  mode        String?
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  invoices    Int?
+  error       String?
+  errorStatus Int?
+  note        String?
+
+  @@index([entityId, startedAt])
+}
+
+/// One month of profit & loss for a PEAK company, from PEAK's trial balance (Financial Performance page).
+model PnlMonth {
+  entityId  String
+  /// yyyyMM
+  month     String
+  /// Hash of the credentials the month was read with. Months read with other keys are never shown.
+  credKey   String
+  /// JSON: Record<PnlLine, number>
+  totals    String
+  /// JSON: PnlAccount[]
+  accounts  String
+  fetchedAt DateTime
+
+  @@id([entityId, month])
+}
+
+/// Small key/value store for sync bookkeeping, e.g. NetSuite's incremental-read state.
+model SyncState {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
