@@ -1,5 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
+import { SAMPLE_MODE } from "../mode";
 
 // Server-only PEAK Open API client. Signing and token handling follow
 // ../peak_account/lib/peak.ts and lib/peak-session.ts, extended to several credentials at once.
@@ -162,6 +163,7 @@ export interface TestResult {
 
 /** Requests a fresh Client Token: proves the Connect ID / Connect Key pair works on that environment. */
 export async function testDeveloper(conn: Connection): Promise<TestResult> {
+  if (SAMPLE_MODE) return { ok: true, message: "Sample mode: no request was sent to PEAK." };
   try {
     await clientToken(conn, true);
     return { ok: true, message: `PEAK issued a Client Token on ${conn.env === "uat" ? "UAT" : "Production"} (valid 24 h).` };
@@ -179,6 +181,9 @@ export function redact(message: string, secrets: string[]): string {
 
 /** Calls GET /api/v1/User/detail with the User Token: proves it is valid and shows which business it opens. */
 export async function testCompany(conn: Connection, userToken: string): Promise<TestResult> {
+  if (SAMPLE_MODE) {
+    return { ok: true, message: "Sample mode: no request was sent to PEAK.", business: { name: "Sample business", package: "Sample", userEmail: null, userName: "Sample user" } };
+  }
   try {
     const json = await peakGet(conn, userToken, "/api/v1/User/detail");
     const outer = pick(json, "PeakUser");

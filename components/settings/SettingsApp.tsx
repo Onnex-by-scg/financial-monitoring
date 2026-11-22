@@ -122,6 +122,12 @@ export default function SettingsApp() {
             </aside>
 
             <div key={section} className="rise-in min-w-0 space-y-4">
+              {settings.source === "sample" && (
+                <Alert kind="info" title="Sample mode">
+                  Companies and keys here are made up. Changes are kept in memory only and reset when the dev server restarts; nothing is
+                  sent to PEAK, NetSuite or the database.
+                </Alert>
+              )}
               {settings.source === "env" && section !== "netsuite" && section !== "sync" && (
                 <Alert kind="info" title="Using values from .env.local">
                   These credentials come from <code>.env.local</code>. Saving any change here stores them in {settings.storagePath}, which is used

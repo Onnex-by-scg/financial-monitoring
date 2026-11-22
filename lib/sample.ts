@@ -1,9 +1,9 @@
 import { bangkokToday, round2, type ArDebug, type ArInvoice, type ArResponse } from "./ar";
 
-// Made-up AR data (PEAK_USE_SAMPLE=1 in .env.local) for demos and for when PEAK UAT is closed (it only runs Mon–Fri 08:00–22:00 Bangkok time).
+// Made-up AR data (sample mode, lib/mode.ts: `pnpm dev:sample`) for demos and for when PEAK UAT is closed (it only runs Mon–Fri 08:00–22:00 Bangkok time).
 // No PEAK calls. Dates are generated relative to today so the aging always looks realistic.
 
-const SAMPLE_ENTITIES = ["BLC", "BPM", "Reseller", "Solar", "THS (Monthly)", "ZSA (Monthly)"];
+export const SAMPLE_ENTITIES = ["BLC", "BPM", "Reseller", "Solar", "THS (Monthly)", "ZSA (Monthly)"];
 
 const CUSTOMERS = [
   "บริษัท สยามกรีนเอนเนอร์ยี จำกัด",
@@ -48,9 +48,13 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// The sample NetSuite connection in sample mode's Settings (lib/sample-settings.ts).
+const SAMPLE_NETSUITE = { id: "ns-sample", name: "Sample NetSuite" };
+
 export function sampleData(entityCode: string | null): ArResponse {
-  const entity = SAMPLE_ENTITIES.includes(entityCode ?? "") ? entityCode! : SAMPLE_ENTITIES[0];
-  const idx = SAMPLE_ENTITIES.indexOf(entity);
+  const isNs = entityCode === SAMPLE_NETSUITE.id;
+  const entity = isNs ? SAMPLE_NETSUITE.id : SAMPLE_ENTITIES.includes(entityCode ?? "") ? entityCode! : SAMPLE_ENTITIES[0];
+  const idx = isNs ? SAMPLE_ENTITIES.length : SAMPLE_ENTITIES.indexOf(entity);
   const rand = rng(idx * 7919 + 17);
   const asOf = bangkokToday();
   const prefix = entity.slice(0, 2).toUpperCase();
@@ -83,8 +87,11 @@ export function sampleData(entityCode: string | null): ArResponse {
 
   return {
     entity,
-    entityName: entity,
-    entities: SAMPLE_ENTITIES.map((e) => ({ id: e, name: e, provider: "peak" as const })),
+    entityName: isNs ? SAMPLE_NETSUITE.name : entity,
+    entities: [
+      ...SAMPLE_ENTITIES.map((e) => ({ id: e, name: e, provider: "peak" as const })),
+      { ...SAMPLE_NETSUITE, provider: "netsuite" as const },
+    ],
     businessName: "Sample data",
     source: "sample",
     asOf,

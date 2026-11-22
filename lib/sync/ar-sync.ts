@@ -8,6 +8,8 @@ import { getArData as getPeakAr } from "../peak/ar-source";
 import { hash, PeakError, type Company } from "../peak/client";
 import { readSettings, resolveCompanies, type StoredNetSuite } from "../peak/settings-store";
 import { beginProgress, SAVE_STEP } from "./progress";
+import { SAMPLE_MODE } from "../mode";
+import { sampleRuns } from "../sample-runs";
 
 // The sync service (AR part; profit & loss is lib/sync/pnl-sync.ts, whole rounds lib/sync/round.ts): pulls AR from PEAK / NetSuite and stores it in SQLite (lib/db.ts). The dashboard only reads
 // the database (readAr); pulls happen on a schedule (lib/sync/scheduler.ts), when someone clicks Refresh, or the
@@ -40,6 +42,7 @@ export async function listTargets(): Promise<{ entities: ArEntity[]; targets: Ta
 
 /** Starts a pull for one tab, or joins the one already running. Resolves when it ends; rejects if it failed. */
 export function syncEntity(target: Target, entities: ArEntity[], trigger: SyncTrigger): Promise<void> {
+  if (SAMPLE_MODE) return Promise.resolve(); // sample data is generated on read; nothing to pull
   const existing = running.get(target.id);
   if (existing) return existing;
   const p = runSync(target, entities, trigger).finally(() => running.delete(target.id));
@@ -177,6 +180,7 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
 
 /** Removes everything stored for a tab (called when it's deleted in Settings). */
 export async function deleteEntityData(entityId: string) {
+  if (SAMPLE_MODE) return;
   await db.$transaction([
     db.arSnapshot.deleteMany({ where: { entityId } }), // invoices cascade
     db.syncRun.deleteMany({ where: { entityId } }),
@@ -187,6 +191,7 @@ export async function deleteEntityData(entityId: string) {
 
 /** Recent pulls, newest first (for the sync status API). */
 export async function recentRuns(limit = 50) {
+  if (SAMPLE_MODE) return sampleRuns((await listTargets()).targets, limit);
   return db.syncRun.findMany({ orderBy: { startedAt: "desc" }, take: limit });
 }
 

@@ -5,6 +5,7 @@
   "scripts": {
     "predev": "prisma migrate deploy",
     "dev": "next dev -H 127.0.0.1",
+    "dev:sample": "PEAK_USE_SAMPLE=1 next dev -H 127.0.0.1",
     "prebuild": "prisma generate",
     "build": "next build",
     "prestart": "prisma migrate deploy",

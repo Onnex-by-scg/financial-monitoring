@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { db } from "../db";
+import { SAMPLE_MODE } from "../mode";
+import { sampleSettings } from "../sample-settings";
 import { BASE_URLS, PeakError, type Company, type Connection, type PeakEnv } from "./client";
 import type { NsConnection } from "../netsuite/client";
 import { restletHost } from "../netsuite/client";
@@ -14,7 +16,10 @@ import { nsKind, type PublicCompany, type PublicDeveloper, type PublicNetSuite, 
 //  2. .peak/settings.json, where older installs saved them (read-only now; the next save moves them to the database);
 //  3. .env.local / host environment variables (PEAK_*).
 
+// In sample mode (lib/mode.ts) settings live in memory instead, seeded with sample companies.
+
 const SETTINGS_KEY = "settings";
+const mem = globalThis as { __sampleSettings?: Settings };
 const LEGACY_FILE = path.join(process.cwd(), ".peak", "settings.json");
 
 interface StoredVerification {
@@ -62,13 +67,14 @@ export interface SyncSettings {
   skipClosedUat: boolean;
 }
 
-type Source = "db" | "file" | "env" | "none";
+type Source = "sample" | "db" | "file" | "env" | "none";
 
 function normalize(parsed: Partial<Settings>): Settings {
   return { version: 1, developer: parsed.developer ?? null, companies: parsed.companies ?? [], netsuite: parsed.netsuite ?? [], sync: parsed.sync };
 }
 
 export async function readSettings(): Promise<{ source: Source; settings: Settings }> {
+  if (SAMPLE_MODE) return { source: "sample", settings: structuredClone((mem.__sampleSettings ??= sampleSettings())) };
   const row = await db.appSetting.findUnique({ where: { key: SETTINGS_KEY } });
   if (row) {
     try {
@@ -94,6 +100,10 @@ export async function updateSettings(mutate: (s: Settings) => void | Promise<voi
   const run = writing.then(async () => {
     const { settings } = await readSettings();
     await mutate(settings);
+    if (SAMPLE_MODE) {
+      mem.__sampleSettings = structuredClone(settings);
+      return settings;
+    }
     const value = JSON.stringify(settings);
     await db.appSetting.upsert({ where: { key: SETTINGS_KEY }, create: { key: SETTINGS_KEY, value }, update: { value } });
     return settings;
@@ -144,7 +154,7 @@ export async function publicSettings(): Promise<PublicSettings> {
   }));
   return {
     source,
-    storagePath: "the database",
+    storagePath: SAMPLE_MODE ? "memory (sample mode, reset on restart)" : "the database",
     developer: settings.developer ? publicDeveloper(settings.developer) : null,
     companies,
     netsuite: settings.netsuite.map(publicNetSuite),

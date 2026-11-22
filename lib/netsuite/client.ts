@@ -1,6 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { PeakError, redact } from "../peak/client";
+import { SAMPLE_MODE } from "../mode";
 
 // Server-only client for SCG's NetSuite integration RESTlet (netsuite_api_docs/).
 // Auth: OAuth 1.0 Token-Based Authentication (TBA), HMAC-SHA256, as in the doc's
@@ -147,6 +148,14 @@ export interface NsTestResult {
 
 /** Reads the Subsidiary list (small, read-only): proves the keys, the account and the RESTlet deployment all work. */
 export async function testNetSuite(conn: NsConnection): Promise<NsTestResult> {
+  if (SAMPLE_MODE) {
+    return {
+      ok: true,
+      message: `Sample mode: no request was sent to NetSuite account ${conn.accountId}.`,
+      subsidiaries: ["Sample Subsidiary A", "Sample Subsidiary B"],
+      arEndpoint: { ok: true, message: "Sample mode: AR endpoint not checked." },
+    };
+  }
   try {
     const json = (await nsGet(conn, { service_type: "subsidiary" })) as { data?: { total?: number; data?: { name?: string; full_name?: string }[] } };
     const rows = json.data?.data ?? [];

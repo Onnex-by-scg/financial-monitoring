@@ -1,7 +1,7 @@
 import { bangkokToday, round2 } from "./ar";
 import { classifyAccount, emptyTotals, monthsFor, type PnlAccount, type PnlMonth, type PnlResponse } from "./pnl";
 
-// Made-up P&L for PEAK_USE_SAMPLE=1 (no PEAK calls). Account codes follow a Thai chart of accounts.
+// Made-up P&L for sample mode (lib/mode.ts; no PEAK calls). Account codes follow a Thai chart of accounts.
 const REVENUE = [99_246, 104_449, 151_512, 152_853, 305_411, 594_525, 348_846, 348_846, 348_846, 348_846, 348_846, 348_846];
 
 export function samplePnl(year: number): PnlResponse {

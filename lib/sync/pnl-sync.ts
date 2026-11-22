@@ -7,6 +7,7 @@ import { legacyPnlFile, readLegacyPnl, readTrialBalanceMonth } from "../peak/pnl
 import { monthsFor, type PnlAccount, type PnlLine, type PnlMonth, type PnlResponse } from "../pnl";
 import { listTargets, type SyncTrigger, type Target } from "./ar-sync";
 import { beginProgress, SAVE_STEP } from "./progress";
+import { SAMPLE_MODE } from "../mode";
 
 // The sync service for Financial Performance: reads PEAK's trial balance month by month and stores each month in
 // the database (PnlMonth). The page only reads the database (readPnl).
@@ -82,6 +83,7 @@ function plan(year: number | null, stored: Map<string, number>, trigger: SyncTri
  * (then plans again, so nothing is read twice). Resolves when done; rejects if a month failed.
  */
 export async function syncPnl(target: PeakTarget, trigger: SyncTrigger, year: number | null, opts: { recentMinAgeMs?: number } = {}): Promise<void> {
+  if (SAMPLE_MODE) return; // sample P&L is generated on read
   for (let r = running.get(target.id); r; r = running.get(target.id)) await r.catch(() => undefined);
   const p = runPnl(target, trigger, year, opts.recentMinAgeMs ?? RECENT_MIN_AGE_MS).finally(() => running.delete(target.id));
   running.set(target.id, p);
@@ -186,6 +188,7 @@ export async function readPnl(entityId: string | null, year: number, opts: { ref
 
 /** Removes a company's saved months (called when it's deleted in Settings). */
 export async function deletePnlData(entityId: string) {
+  if (SAMPLE_MODE) return;
   await db.pnlMonth.deleteMany({ where: { entityId } });
   await fs.rm(legacyPnlFile(entityId), { force: true }).catch(() => undefined);
 }

@@ -7,6 +7,7 @@ Executive accounts-receivable (AR) aging dashboard built with Next.js, TypeScrip
 ```bash
 pnpm install                 # also generates the Prisma client
 pnpm dev                     # applies database migrations, then http://127.0.0.1:3000
+pnpm dev:sample              # UI work: made-up data, no database, no PEAK / NetSuite calls
 ```
 
 `pnpm-workspace.yaml` allows the install scripts of `prisma`, `@prisma/engines` and `better-sqlite3` (a dependency of the Prisma CLI); pnpm blocks them otherwise (`ERR_PNPM_IGNORED_BUILDS`).
@@ -62,7 +63,14 @@ The doc lists #46 under LHS, so for other business units, confirm with the NetSu
 
 `netsuite_api_docs/` contains live sandbox keys, so keep it out of git and don't share it.
 
-PEAK UAT is only open Mon–Fri 08:00–22:00 Bangkok time. For demos without PEAK, set `PEAK_USE_SAMPLE=1` in `.env.local` to serve made-up data.
+PEAK UAT is only open Mon–Fri 08:00–22:00 Bangkok time.
+
+**Sample mode, for UI work:** `pnpm dev:sample` runs the app with made-up data and no outside connections (`lib/mode.ts`). It needs no `DATABASE_URL` or PEAK keys.
+- **Data:** AR and P&L come from `lib/sample.ts` / `lib/sample-pnl.ts`, for six sample PEAK companies and one sample NetSuite connection.
+- **Settings:** pre-filled from `lib/sample-settings.ts` and kept in memory. Changes work but reset when the server restarts.
+- **Calls:** connection tests pass without calling PEAK or NetSuite. Pulls do nothing, and the sync history is made up (`lib/sample-runs.ts`).
+- **Database:** never opened. Any code that tries to use `db` throws "Sample mode has no database", so a new feature that needs sample handling shows up at once.
+- **Production:** sample mode is ignored in production builds (`next build` / `next start`, Netlify), even with `PEAK_USE_SAMPLE=1` set, so production always uses Supabase and the real APIs.
 
 ## Database and sync service
 
@@ -81,7 +89,7 @@ PEAK / NetSuite ──(sync service: lib/sync/ar-sync.ts)──> Postgres (Supab
 - **A pull replaces the tab's snapshot in one transaction**, so the page never sees half a pull. One pull per tab at a time; a second request joins the running one.
 - **Credentials:** each snapshot records a hash of the keys it was read with. After keys change in Settings, the old data isn't shown; the next visit waits for a new pull. Removing a tab in Settings deletes its rows.
 - **Failures keep the last good data.** The dashboard shows it with "Last update failed (time): <plain explanation>" and Try again.
-- **Schedule: Settings → Data sync.** Turn scheduled pulls on/off and pick the interval (5 min – 24 h; presets or a custom number of minutes), and whether to skip PEAK UAT outside Mon–Fri 08:00–22:00 Bangkok. Saved with the other settings in the database (`sync`); the scheduler re-reads it every 30 seconds, so no restart is needed, and the next round is counted from the save. Until it's saved, `SYNC_INTERVAL_MINUTES` (default 15) applies. 10 seconds after the server starts, tabs whose data is older than the interval are pulled. `SYNC_SCHEDULE=0` or `PEAK_USE_SAMPLE=1` turn scheduling off on the server regardless (the page says so). The same page shows each tab's last pull, the next round, the recent pulls, and **Pull all now**.
+- **Schedule: Settings → Data sync.** Turn scheduled pulls on/off and pick the interval (5 min – 24 h; presets or a custom number of minutes), and whether to skip PEAK UAT outside Mon–Fri 08:00–22:00 Bangkok. Saved with the other settings in the database (`sync`); the scheduler re-reads it every 30 seconds, so no restart is needed, and the next round is counted from the save. Until it's saved, `SYNC_INTERVAL_MINUTES` (default 15) applies. 10 seconds after the server starts, tabs whose data is older than the interval are pulled. `SYNC_SCHEDULE=0` or sample mode turn scheduling off on the server regardless (the page says so). The same page shows each tab's last pull, the next round, the recent pulls, and **Pull all now**.
 - **↻ Refresh** starts a pull and returns at once with the saved data; the page reloads when the pull ends.
 - **Progress, step by step** (`lib/sync/progress.ts`, `components/SyncProgress.tsx`): every pull reports its steps, which the first-load screen and the Refresh banner show with a bar, the current activity and counts. PEAK: connecting → customer names → outstanding invoices → project groups → amounts due (only if the list left them out) → each invoice's project → saving. NetSuite full read: every page (n of N) → saving; update: newest pages → re-checking last time's open invoices (n of N) → saving. Skipped steps say why; a switch from update to full read is explained above the steps. `/api/ar/progress` serves it from memory.
 - **API:** `GET /api/sync` shows each tab (running?) and the last 50 pulls; `POST /api/sync[?entity=<id>]` starts a pull now (`npm run sync` does this for all tabs). Same-origin only; the server binds to 127.0.0.1.
@@ -159,4 +167,4 @@ Monthly profit & loss for one PEAK company, switched to with the **AR Aging / Fi
   - older months once a day.
 - **When it pulls:** every scheduled round and **Pull all now** (after the company's AR: this year, plus December in January); **Refresh** on the page (in the background, with a progress bar); opening a year with months never read (the page waits and shows progress; reading a whole year takes a little over a minute). A failed pull keeps the saved months and says so. Months saved by the old file cache (`.peak/cache/peak-pnl-<company>.json`) are imported on first use.
 - NetSuite tabs are disabled here: the SCG RESTlet has no P&L or trial-balance endpoint.
-- `PEAK_USE_SAMPLE=1` serves made-up months (`lib/sample-pnl.ts`).
+- Sample mode (`pnpm dev:sample`) serves made-up months (`lib/sample-pnl.ts`).
