@@ -1,0 +1,13 @@
+# Netlify build for the dashboard (Next.js runtime is added by Netlify automatically).
+# Secrets (DATABASE_URL, PEAK_* credentials) are set in the Netlify UI, never here: this file is committed.
+[build]
+  command = "pnpm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "24"
+  PNPM_VERSION = "12.18.0"
+
+# Runtime variables are set on the Netlify project (values here only reach the build), including
+# SYNC_SCHEDULE=0: the app runs as serverless functions, so the in-process sync timer (instrumentation.ts)
+# can't run. Pull data with Refresh in the dashboard, or POST /api/sync from a scheduler.

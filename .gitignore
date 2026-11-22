@@ -52,3 +52,6 @@ next-env.d.ts
 
 # This project uses pnpm (pnpm-lock.yaml); an npm lockfile would conflict with it
 package-lock.json
+
+# Netlify CLI link state
+.netlify
