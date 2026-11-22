@@ -9,7 +9,7 @@ pnpm install                 # also generates the Prisma client
 pnpm dev                     # applies database migrations, then http://127.0.0.1:3000
 ```
 
-`pnpm-workspace.yaml` allows the install scripts of `better-sqlite3` (native SQLite driver), `prisma` and `@prisma/engines`; pnpm blocks them otherwise (`ERR_PNPM_IGNORED_BUILDS`).
+`pnpm-workspace.yaml` allows the install scripts of `prisma`, `@prisma/engines` and `better-sqlite3` (a dependency of the Prisma CLI); pnpm blocks them otherwise (`ERR_PNPM_IGNORED_BUILDS`).
 
 Then open **Settings** (top right) to connect PEAK. The first visit starts a setup guide adapted from `../peak_account`:
 
@@ -69,14 +69,14 @@ PEAK UAT is only open Mon–Fri 08:00–22:00 Bangkok time. For demos without PE
 The dashboard never calls PEAK or NetSuite itself. A sync service pulls the data into a SQLite database, and `/api/ar` only reads the database.
 
 ```
-PEAK / NetSuite ──(sync service: lib/sync/ar-sync.ts)──> SQLite .peak/app.db ──(/api/ar)──> dashboard
+PEAK / NetSuite ──(sync service: lib/sync/ar-sync.ts)──> Postgres (Supabase) ──(/api/ar)──> dashboard
                   ▲ every 15 min (lib/sync/scheduler.ts)
                   ▲ ↻ Refresh on the dashboard
                   ▲ first visit to a tab with no data yet
                   ▲ POST /api/sync
 ```
 
-- **Database:** Prisma 7 + SQLite (`prisma/schema.prisma`, client in `lib/db.ts`). The file is `.peak/app.db` (gitignored, owner-only); set `DATABASE_URL` to move it. `npm run dev` / `npm start` apply migrations first (`prisma migrate deploy`); `npm install` generates the client. `npm run db:studio` opens a table browser.
+- **Database:** Prisma 7 + Postgres on Supabase, project `testProject` (`prisma/schema.prisma`, client in `lib/db.ts` via `@prisma/adapter-pg`). Set `DATABASE_URL` in `.env.local` to the project's Session pooler connection string (see `.env.example`). Tables have Row Level Security on with no policies, so Supabase's public REST API can't read them; the server connects as `postgres` and isn't affected. `npm run dev` / `npm start` apply migrations first (`prisma migrate deploy`); `npm install` generates the client. `npm run db:studio` opens a table browser.
 - **Tables:** `PnlMonth` (one month of profit & loss per PEAK company), `ArSnapshot` (one per tab: business name, source, as-of date, projects, warnings, Debug info), `ArInvoice` (its outstanding invoices), `SyncRun` (every pull: trigger, status, full/update, error), `SyncState` (NetSuite's update state).
 - **A pull replaces the tab's snapshot in one transaction**, so the page never sees half a pull. One pull per tab at a time; a second request joins the running one.
 - **Credentials:** each snapshot records a hash of the keys it was read with. After keys change in Settings, the old data isn't shown; the next visit waits for a new pull. Removing a tab in Settings deletes its rows.

@@ -1,5 +1,5 @@
 // AR data pulled from PEAK and NetSuite by the sync service (lib/sync/). The dashboard reads only from here.
-// The database file lives in .peak/ (gitignored, owner-only), next to the saved credentials.
+// The database is Postgres (Supabase project testProject); DATABASE_URL in .env.local points at it.
 
 generator client {
   provider = "prisma-client"
@@ -7,7 +7,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 /// Latest successful pull for one dashboard tab (a PEAK company or a NetSuite connection).
