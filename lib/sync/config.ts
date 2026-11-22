@@ -1,7 +1,7 @@
 import "server-only";
 import { readSettings, type SyncSettings } from "../peak/settings-store";
 
-// How often the scheduler pulls. Settings → Data sync (saved in .peak/settings.json) wins; otherwise the
+// How often the scheduler pulls. Settings → Data sync (saved in the database) wins; otherwise the
 // SYNC_INTERVAL_MINUTES env var; otherwise 15 minutes. PEAK_USE_SAMPLE=1 or SYNC_SCHEDULE=0 turn it off entirely.
 
 export const MIN_INTERVAL_MINUTES = 5;

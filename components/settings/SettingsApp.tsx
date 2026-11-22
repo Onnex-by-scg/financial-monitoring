@@ -124,8 +124,8 @@ export default function SettingsApp() {
             <div key={section} className="rise-in min-w-0 space-y-4">
               {settings.source === "env" && section !== "netsuite" && section !== "sync" && (
                 <Alert kind="info" title="Using values from .env.local">
-                  These credentials come from <code>.env.local</code>. Saving any change here creates <code>{settings.storagePath}</code>, which is used from
-                  then on.
+                  These credentials come from <code>.env.local</code>. Saving any change here stores them in {settings.storagePath}, which is used
+                  from then on.
                 </Alert>
               )}
               {section === "developer" && <DeveloperSection settings={settings} onChange={setSettings} />}

@@ -96,3 +96,11 @@ model SyncState {
   value     String
   updatedAt DateTime @updatedAt
 }
+
+/// Settings saved from the Settings page (PEAK / NetSuite credentials, sync options), as JSON under key "settings".
+/// In the database rather than a file so it works on serverless hosts (Netlify), whose disk is read-only.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

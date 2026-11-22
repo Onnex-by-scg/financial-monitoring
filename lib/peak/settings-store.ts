@@ -2,16 +2,20 @@ import "server-only";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { db } from "../db";
 import { BASE_URLS, PeakError, type Company, type Connection, type PeakEnv } from "./client";
 import type { NsConnection } from "../netsuite/client";
 import { restletHost } from "../netsuite/client";
 import { nsKind, type PublicCompany, type PublicDeveloper, type PublicNetSuite, type PublicSettings } from "../settings-types";
 
-// PEAK credentials saved from the Settings page. Kept on the server only, in .peak/settings.json
-// (file mode 0600, gitignored). Until that file exists, values are read from .env.local.
+// Credentials and options saved from the Settings page. Kept on the server only, in the database
+// (AppSetting row "settings"; RLS keeps it away from Supabase's public API). Read in this order:
+//  1. the database, once anything has been saved;
+//  2. .peak/settings.json, where older installs saved them (read-only now; the next save moves them to the database);
+//  3. .env.local / host environment variables (PEAK_*).
 
-const DIR = path.join(process.cwd(), ".peak");
-const FILE = path.join(DIR, "settings.json");
+const SETTINGS_KEY = "settings";
+const LEGACY_FILE = path.join(process.cwd(), ".peak", "settings.json");
 
 interface StoredVerification {
   ok: boolean;
@@ -58,34 +62,40 @@ export interface SyncSettings {
   skipClosedUat: boolean;
 }
 
-type Source = "file" | "env" | "none";
+type Source = "db" | "file" | "env" | "none";
+
+function normalize(parsed: Partial<Settings>): Settings {
+  return { version: 1, developer: parsed.developer ?? null, companies: parsed.companies ?? [], netsuite: parsed.netsuite ?? [], sync: parsed.sync };
+}
 
 export async function readSettings(): Promise<{ source: Source; settings: Settings }> {
+  const row = await db.appSetting.findUnique({ where: { key: SETTINGS_KEY } });
+  if (row) {
+    try {
+      return { source: "db", settings: normalize(JSON.parse(row.value) as Partial<Settings>) };
+    } catch (e) {
+      throw new PeakError(500, `Saved settings in the database are not valid JSON: ${(e as Error).message}`);
+    }
+  }
   try {
-    const parsed = JSON.parse(await fs.readFile(FILE, "utf8")) as Settings;
-    return {
-      source: "file",
-      settings: { version: 1, developer: parsed.developer ?? null, companies: parsed.companies ?? [], netsuite: parsed.netsuite ?? [], sync: parsed.sync },
-    };
+    return { source: "file", settings: normalize(JSON.parse(await fs.readFile(LEGACY_FILE, "utf8")) as Partial<Settings>) };
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw new PeakError(500, `Could not read ${FILE}: ${(e as Error).message}`);
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw new PeakError(500, `Could not read ${LEGACY_FILE}: ${(e as Error).message}`);
   }
   const fromEnv = settingsFromEnv();
   return { source: fromEnv.developer || fromEnv.companies.length ? "env" : "none", settings: fromEnv };
 }
 
-// Serialize writes so two quick saves can't interleave.
+// Serialize writes within this server process so two quick saves can't interleave.
 let writing: Promise<unknown> = Promise.resolve();
 
 export async function updateSettings(mutate: (s: Settings) => void | Promise<void>): Promise<Settings> {
   const run = writing.then(async () => {
     const { settings } = await readSettings();
     await mutate(settings);
-    await fs.mkdir(DIR, { recursive: true, mode: 0o700 });
-    const tmp = `${FILE}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(settings, null, 2), { mode: 0o600 });
-    await fs.rename(tmp, FILE);
-    await fs.chmod(FILE, 0o600);
+    const value = JSON.stringify(settings);
+    await db.appSetting.upsert({ where: { key: SETTINGS_KEY }, create: { key: SETTINGS_KEY, value }, update: { value } });
     return settings;
   });
   writing = run.catch(() => undefined);
@@ -134,7 +144,7 @@ export async function publicSettings(): Promise<PublicSettings> {
   }));
   return {
     source,
-    storagePath: path.relative(process.cwd(), FILE),
+    storagePath: "the database",
     developer: settings.developer ? publicDeveloper(settings.developer) : null,
     companies,
     netsuite: settings.netsuite.map(publicNetSuite),

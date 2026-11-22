@@ -5,7 +5,7 @@ import { getSyncConfig, MAX_INTERVAL_MINUTES, MIN_INTERVAL_MINUTES } from "@/lib
 import { restartSchedule } from "@/lib/sync/scheduler";
 
 // GET /api/settings/sync -> { enabled, intervalMinutes, skipClosedUat, fromSettings }
-// PUT /api/settings/sync { enabled, intervalMinutes, skipClosedUat } -> saves to .peak/settings.json.
+// PUT /api/settings/sync { enabled, intervalMinutes, skipClosedUat } -> saves to the database (lib/peak/settings-store.ts).
 // The scheduler re-reads it within 30 seconds; the next round is counted from the save.
 export const GET = route(async () => getSyncConfig());
 
