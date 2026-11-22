@@ -76,8 +76,8 @@ export function SecretInput({ value, onChange, placeholder }: { value: string; o
 
 export function EnvPicker({ value, onChange }: { value: PeakEnvName; onChange: (v: PeakEnvName) => void }) {
   const notes: Record<PeakEnvName, string> = {
-    uat: "For testing. Open Mon–Fri 08:00–22:00 (Bangkok).",
-    production: "Live data. Needs a Production credential from PEAK.",
+    uat: "For testing · Mon–Fri 08:00–22:00",
+    production: "Live data",
   };
   return (
     <div className="grid gap-2 sm:grid-cols-2" role="radiogroup">
@@ -242,50 +242,95 @@ export function Card({ title, description, action, children }: { title: string; 
   );
 }
 
-export function Stepper({ steps, step }: { steps: string[]; step: number }) {
+/** The setup guides' frame: a card with a progress bar and the current step. */
+export function Wizard({
+  title,
+  steps,
+  step,
+  onClose,
+  children,
+}: {
+  title: string;
+  steps: string[];
+  step: number;
+  onClose?: () => void;
+  children: ReactNode;
+}) {
   return (
-    <ol className="mb-6 flex items-center gap-2">
-      {steps.map((label, i) => {
-        const done = i < step;
-        const current = i === step;
-        return (
-          <li key={label} className="flex flex-1 items-center gap-2">
-            <span
-              className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                done ? "bg-brand text-white" : current ? "bg-brand-soft text-brand ring-2 ring-brand" : "bg-slate-200 text-slate-500"
-              }`}
-            >
-              {done ? "✓" : i + 1}
-            </span>
-            <span className={`hidden text-sm sm:block ${current ? "font-semibold text-slate-900" : "text-slate-500"}`}>{label}</span>
-            {i < steps.length - 1 && <span className={`h-px flex-1 ${done ? "bg-brand" : "bg-slate-200"}`} />}
-          </li>
-        );
-      })}
-    </ol>
+    <div className="mx-auto max-w-2xl">
+      <div className="overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+        <div className="border-b border-slate-100 px-6 pt-5 pb-4 sm:px-8">
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="text-base font-semibold tracking-tight text-slate-900">{title}</h1>
+            {onClose && (
+              <button type="button" onClick={onClose} className="rounded-md px-2 py-1 text-sm text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+                Close
+              </button>
+            )}
+          </div>
+          <ol className="mt-4 grid gap-2" style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }}>
+            {steps.map((label, i) => (
+              <li key={label} aria-current={i === step ? "step" : undefined}>
+                <div className="h-1 overflow-hidden rounded-full bg-slate-100">
+                  <div className={`h-full rounded-full bg-brand transition-all duration-500 ${i <= step ? "w-full" : "w-0"}`} />
+                </div>
+                <span className={`mt-1.5 block truncate text-[11px] font-medium ${i === step ? "text-slate-900" : i < step ? "text-slate-500" : "text-slate-400"}`}>
+                  {label}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+        <div key={step} className="rise-in px-6 py-6 sm:px-8">
+          {children}
+        </div>
+      </div>
+    </div>
   );
 }
 
-/** A checklist the user ticks before a setup guide continues. */
-export function Checklist({ items, checked, onChange }: { items: ReactNode[]; checked: boolean[]; onChange: (v: boolean[]) => void }) {
+/** A step's heading inside a Wizard. */
+export function StepTitle({ title, sub }: { title: ReactNode; sub?: ReactNode }) {
   return (
-    <ul className="space-y-2">
-      {items.map((item, i) => (
-        <li key={i}>
-          <label
-            className={`flex cursor-pointer gap-3 rounded-xl border p-3 text-sm transition ${checked[i] ? "border-brand/25 bg-brand-soft/50" : "border-slate-200 hover:bg-slate-50"}`}
-          >
-            <input
-              type="checkbox"
-              className="mt-0.5 size-4 accent-brand"
-              checked={checked[i]}
-              onChange={(e) => onChange(checked.map((v, j) => (j === i ? e.target.checked : v)))}
-            />
-            <span className="text-slate-700">{item}</span>
-          </label>
+    <div className="mb-5">
+      <h2 className="text-xl font-semibold tracking-tight text-slate-900">{title}</h2>
+      {sub && <p className="mt-1 text-sm text-slate-500">{sub}</p>}
+    </div>
+  );
+}
+
+/** The buttons at the bottom of a wizard step: back on the left, the rest on the right. */
+export function StepActions({ back, children }: { back?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="mt-6 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-5">
+      {back}
+      <div className="ml-auto flex flex-wrap items-center gap-2">{children}</div>
+    </div>
+  );
+}
+
+/** "What you'll need": the values a setup guide asks for, as small cards. */
+export function NeedList({ items }: { items: { label: string; from: ReactNode }[] }) {
+  return (
+    <ul className={`grid gap-2 ${items.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+      {items.map((it) => (
+        <li key={it.label} className="rounded-xl border border-slate-200 px-4 py-3">
+          <p className="text-sm font-semibold text-slate-800">{it.label}</p>
+          <p className="mt-0.5 text-xs text-slate-500">{it.from}</p>
         </li>
       ))}
     </ul>
+  );
+}
+
+/** The last step of a setup guide. */
+export function DoneHeader({ title, sub }: { title: ReactNode; sub?: ReactNode }) {
+  return (
+    <div className="mb-5 text-center">
+      <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-full bg-green-50 text-xl text-green-600 ring-1 ring-green-600/15">✓</div>
+      <h2 className="text-xl font-semibold tracking-tight text-slate-900">{title}</h2>
+      {sub && <p className="mt-1 text-sm text-slate-500">{sub}</p>}
+    </div>
   );
 }
 

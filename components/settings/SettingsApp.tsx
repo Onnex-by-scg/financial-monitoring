@@ -23,8 +23,8 @@ export default function SettingsApp() {
       .settings()
       .then((s) => {
         setSettings(s);
-        // First run: walk through setup until there is a developer credential and a company.
-        setWizard(!s.developer && !s.companies.some((c) => c.ownDeveloper) ? true : s.companies.length === 0);
+        // First run: the setup guide until something (PEAK or NetSuite) is connected.
+        setWizard(s.companies.length === 0 && s.netsuite.length === 0);
       })
       .catch((e: Error) => setLoadError(e.message));
   }, []);
@@ -61,7 +61,7 @@ export default function SettingsApp() {
           </div>
           {settings && !wizard && (
             <Button variant="secondary" size="sm" className="ml-auto" onClick={() => setWizard(true)}>
-              PEAK setup guide
+              Setup guide
             </Button>
           )}
         </div>

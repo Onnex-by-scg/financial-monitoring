@@ -29,7 +29,7 @@ function DeveloperFields({
       <Field label="Environment">
         <EnvPicker value={env} onChange={setEnv} />
       </Field>
-      {env === "uat" && !isUatOpen() && <Alert kind="warn">PEAK UAT may be offline right now (open Mon–Fri 08:00–22:00 Bangkok time). Tests may fail.</Alert>}
+      {env === "uat" && !isUatOpen() && <Alert kind="warn">PEAK UAT is closed right now, so tests may fail.</Alert>}
       <Field label="Connect ID" hint="From the ZIP in PEAK's API email.">
         <TextInput
           value={connectId}
@@ -51,11 +51,13 @@ export function DeveloperForm({
   onSaved,
   onCancel,
   saveLabel = "Save",
+  cancelLabel = "Cancel",
 }: {
   saved: PublicDeveloper | null;
   onSaved: (s: PublicSettings) => void;
   onCancel?: () => void;
   saveLabel?: string;
+  cancelLabel?: string;
 }) {
   const [env, setEnv] = useState<PeakEnvName>(saved?.env ?? "uat");
   const [connectId, setConnectId] = useState("");
@@ -121,25 +123,16 @@ export function DeveloperForm({
       />
       {result && <TestResultAlert result={result} />}
       {error && <Alert kind="err">{error}</Alert>}
-      <div className="flex flex-wrap items-center gap-2 pt-1">
-        <Button type="submit" loading={busy === "save"} disabled={busy !== null}>
-          {saveLabel}
-        </Button>
-        <Button variant="secondary" onClick={test} loading={busy === "test"} disabled={busy !== null}>
-          Test connection
-        </Button>
-        {canForce && (
-          <Button variant="ghost" onClick={() => save(true)} disabled={busy !== null}>
-            Save anyway
-          </Button>
-        )}
-        {onCancel && (
-          <Button variant="ghost" onClick={onCancel} className="ml-auto">
-            Cancel
-          </Button>
-        )}
-      </div>
-      <p className="text-xs text-slate-500">PEAK allows 10 tests per minute.</p>
+      <FormActions
+        onCancel={onCancel}
+        cancelLabel={cancelLabel}
+        busy={busy}
+        canForce={canForce}
+        onForce={() => save(true)}
+        onTest={test}
+        testTitle="PEAK allows 10 tests a minute"
+        saveLabel={saveLabel}
+      />
     </form>
   );
 }
@@ -157,11 +150,8 @@ const OWNER_STEPS = [
 export function OwnerInstructions({ defaultOpen = false }: { defaultOpen?: boolean }) {
   const [copied, setCopied] = useState(false);
   return (
-    <details open={defaultOpen} className="group rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-      <summary className="cursor-pointer select-none text-sm font-semibold text-slate-800">How does the company get a User Token?</summary>
-      <p className="mt-2 text-xs text-slate-600">
-        A User Token opens <b>one</b> business in PEAK. Only that business&apos;s owner or admin can create it. Send them these steps:
-      </p>
+    <details open={defaultOpen} className="group rounded-xl bg-slate-50 px-4 py-3">
+      <summary className="cursor-pointer select-none text-sm font-medium text-slate-700">How the owner creates a User Token</summary>
       <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-700">
         {OWNER_STEPS.map((s) => (
           <li key={s}>{s}</li>
@@ -190,6 +180,7 @@ export function CompanyForm({
   onSaved,
   onCancel,
   saveLabel,
+  cancelLabel = "Cancel",
 }: {
   /** Undefined = add a new company */
   company?: PublicCompany;
@@ -197,6 +188,7 @@ export function CompanyForm({
   onSaved: (s: PublicSettings) => void;
   onCancel?: () => void;
   saveLabel?: string;
+  cancelLabel?: string;
 }) {
   const editing = Boolean(company);
   const [name, setName] = useState(company?.name ?? "");
@@ -261,12 +253,12 @@ export function CompanyForm({
       }}
       onChange={reset}
     >
-      <Field label="Company name" hint="Shown as the dashboard tab.">
+      <Field label="Company name">
         <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. ThaiSunny" maxLength={40} />
       </Field>
       <Field
         label="User Token"
-        hint={editing ? `Saved: ${company?.userTokenMasked}. Leave blank to keep it.` : "Created by the company's PEAK owner/admin from your Application Code."}
+        hint={editing ? `Saved: ${company?.userTokenMasked}` : undefined}
       >
         <SecretInput value={userToken} onChange={setUserToken} placeholder={editing ? "Leave blank to keep the saved token" : "Paste the User Token"} />
       </Field>
@@ -280,12 +272,8 @@ export function CompanyForm({
             setOwn(v);
             reset();
           }}
-          label="Use this company's own developer credentials"
-          hint={
-            shared
-              ? `Off: uses the shared developer credentials (${shared.env === "uat" ? "UAT" : "Production"}, ${shared.connectIdMasked}). Turn on if this company has its own PEAK API agreement.`
-              : "No shared developer credentials are set up, so this company needs its own."
-          }
+          label="Own developer credentials"
+          hint={shared ? `Off: shared (${shared.env === "uat" ? "UAT" : "Production"}, ${shared.connectIdMasked}).` : "Required: no shared credentials yet."}
         />
         {own && (
           <div className="mt-4 border-t border-slate-100 pt-4">
@@ -304,27 +292,66 @@ export function CompanyForm({
 
       {result && <TestResultAlert result={result} />}
       {error && <Alert kind="err">{error}</Alert>}
-      <div className="flex flex-wrap items-center gap-2 pt-1">
-        <Button type="submit" loading={busy === "save"} disabled={busy !== null || !name.trim() || (!editing && !userToken.trim())}>
-          {saveLabel ?? (editing ? "Save changes" : "Add company")}
+      <FormActions
+        onCancel={onCancel}
+        cancelLabel={cancelLabel}
+        busy={busy}
+        canForce={canForce}
+        onForce={() => save(true)}
+        onTest={test}
+        testDisabled={!editing && !userToken.trim()}
+        testTitle="Shows which PEAK business this token opens"
+        saveLabel={saveLabel ?? (editing ? "Save changes" : "Add company")}
+        saveDisabled={!name.trim() || (!editing && !userToken.trim())}
+      />
+    </form>
+  );
+}
+
+/** The bottom row of a credentials form: Cancel/Back on the left; Save anyway, Test, Save on the right. */
+export function FormActions({
+  onCancel,
+  cancelLabel = "Cancel",
+  busy,
+  canForce,
+  onForce,
+  onTest,
+  testDisabled,
+  testTitle,
+  saveLabel,
+  saveDisabled,
+}: {
+  onCancel?: () => void;
+  cancelLabel?: string;
+  busy: "test" | "save" | null;
+  canForce: boolean;
+  onForce: () => void;
+  onTest: () => void;
+  testDisabled?: boolean;
+  testTitle?: string;
+  saveLabel: string;
+  saveDisabled?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-5">
+      {onCancel && (
+        <Button variant="ghost" onClick={onCancel}>
+          {cancelLabel}
         </Button>
-        <Button variant="secondary" onClick={test} loading={busy === "test"} disabled={busy !== null || (!editing && !userToken.trim())}>
-          Test connection
-        </Button>
+      )}
+      <div className="ml-auto flex flex-wrap items-center gap-2">
         {canForce && (
-          <Button variant="ghost" onClick={() => save(true)} disabled={busy !== null}>
+          <Button variant="ghost" onClick={onForce} disabled={busy !== null}>
             Save anyway
           </Button>
         )}
-        {onCancel && (
-          <Button variant="ghost" onClick={onCancel} className="ml-auto">
-            Cancel
-          </Button>
-        )}
+        <Button variant="secondary" onClick={onTest} loading={busy === "test"} disabled={busy !== null || testDisabled} title={testTitle}>
+          Test
+        </Button>
+        <Button type="submit" loading={busy === "save"} disabled={busy !== null || saveDisabled}>
+          {saveLabel}
+        </Button>
       </div>
-      <p className="text-xs text-slate-500">
-        Test shows which PEAK business this token opens.
-      </p>
-    </form>
+    </div>
   );
 }

@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { NS_DEFAULT_SCRIPT, nsKind, type NsKind, type PublicNetSuite, type PublicSettings, type TestResponse } from "@/lib/settings-types";
 import { api, ApiError, type NetSuiteBody } from "./api";
-import { Alert, Button, Card, Checklist, Chip, Field, Modal, SecretInput, StatusPill, Stepper, TestResultAlert, TextInput } from "./ui";
+import { FormActions } from "./forms";
+import { Alert, Button, Card, Chip, DoneHeader, Field, Modal, NeedList, SecretInput, StatusPill, StepActions, StepTitle, TestResultAlert, TextInput, Wizard } from "./ui";
 
 // NetSuite connections use OAuth 1.0 Token-Based Authentication (TBA) against SCG's integration RESTlet
 // (netsuite_api_docs/). Each connection = one NetSuite account + one integration record + one access token.
@@ -32,10 +33,10 @@ const hostFor = (accountId: string) => `${(accountId || "<account>").toLowerCase
 type EnvChoice = "prod" | "sb1" | "sb2" | "other";
 
 const ENV_OPTIONS: { key: EnvChoice; label: string; note: string }[] = [
-  { key: "prod", label: "Production", note: "Live data. Account ID is the plain number." },
-  { key: "sb1", label: "Sandbox 1", note: "Account ID ends in _SB1." },
-  { key: "sb2", label: "Sandbox 2", note: "Account ID ends in _SB2." },
-  { key: "other", label: "Other", note: "Type the full Account ID." },
+  { key: "prod", label: "Production", note: "Plain number" },
+  { key: "sb1", label: "Sandbox 1", note: "Ends in _SB1" },
+  { key: "sb2", label: "Sandbox 2", note: "Ends in _SB2" },
+  { key: "other", label: "Other", note: "Full Account ID" },
 ];
 
 // No preselected environment: picking the wrong one silently points at another (or a non-existent) account.
@@ -123,7 +124,7 @@ function AccountFields({ v, set }: { v: AccountState; set: (p: Partial<AccountSt
           <TextInput value={v.other} onChange={(e) => set({ other: e.target.value })} placeholder="1234567_SB3" className="font-mono" />
         </Field>
       ) : (
-        <Field label="Account number" hint="Company ID without the sandbox suffix.">
+        <Field label="Account number" hint="Without the sandbox suffix.">
           <TextInput
             value={v.base}
             onChange={(e) => set({ base: e.target.value.replace(/\D/g, "") })}
@@ -152,11 +153,10 @@ function AccountFields({ v, set }: { v: AccountState; set: (p: Partial<AccountSt
               <span className="font-medium text-green-700">✓ Host found</span>
             ) : check.found === false ? (
               <span className="font-medium text-red-700">
-                ✕ This host doesn&apos;t exist, so no request can reach it. Check the environment and account number (compare with the account_id that works in
-                Postman).
+                ✕ Host not found. Check the environment and account number.
               </span>
             ) : (
-              <span className="text-amber-700">⚠ Couldn&apos;t check the host ({check.code}). The connection test will tell.</span>
+              <span className="text-amber-700">⚠ Couldn&apos;t check the host ({check.code}).</span>
             )}
           </div>
         )}
@@ -189,9 +189,9 @@ function KeyFields({ v, set, saved }: { v: KeyState; set: (p: Partial<KeyState>)
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-slate-200 p-4">
-        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Integration record (the application)</div>
+        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Integration record</div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Consumer Key" hint={saved ? `Saved: ${saved.consumerKeyMasked}` : "Shown once when the integration record is saved."}>
+          <Field label="Consumer Key" hint={saved ? `Saved: ${saved.consumerKeyMasked}` : undefined}>
             <SecretInput value={v.consumerKey} onChange={(x) => set({ consumerKey: x })} placeholder={`Consumer Key${keep}`} />
           </Field>
           <Field label="Consumer Secret">
@@ -200,9 +200,9 @@ function KeyFields({ v, set, saved }: { v: KeyState; set: (p: Partial<KeyState>)
         </div>
       </div>
       <div className="rounded-xl border border-slate-200 p-4">
-        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Access token (user + role)</div>
+        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Access token</div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Token ID" hint={saved ? `Saved: ${saved.tokenIdMasked}` : "Shown once when the access token is created."}>
+          <Field label="Token ID" hint={saved ? `Saved: ${saved.tokenIdMasked}` : undefined}>
             <SecretInput value={v.tokenId} onChange={(x) => set({ tokenId: x })} placeholder={`Token ID${keep}`} />
           </Field>
           <Field label="Token Secret">
@@ -225,11 +225,8 @@ const ADMIN_STEPS = [
 export function NsAdminInstructions({ defaultOpen = false }: { defaultOpen?: boolean }) {
   const [copied, setCopied] = useState(false);
   return (
-    <details open={defaultOpen} className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-      <summary className="cursor-pointer select-none text-sm font-semibold text-slate-800">How does the NetSuite admin create these?</summary>
-      <p className="mt-2 text-xs text-slate-600">
-        For <b>Production</b>, the doc says to contact the NetSuite system administrator. Send them these steps:
-      </p>
+    <details open={defaultOpen} className="rounded-xl bg-slate-50 px-4 py-3">
+      <summary className="cursor-pointer select-none text-sm font-medium text-slate-700">Steps for the NetSuite admin</summary>
       <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-700">
         {ADMIN_STEPS.map((s) => (
           <li key={s}>{s}</li>
@@ -313,34 +310,19 @@ function initialAccount(n?: PublicNetSuite): AccountState {
   return { ...splitAccount(n?.accountId), scriptId: n?.scriptId ?? NS_DEFAULT_SCRIPT, deployId: n?.deployId ?? "1" };
 }
 
-const TEST_NOTE = (
-  <p className="text-xs text-slate-500">
-    Test only reads from NetSuite.
-  </p>
-);
-
 // ---------- Setup guide ----------
 
-const STEPS = ["Get started", "Account", "Access keys", "Done"];
+const STEPS = ["What you need", "Account", "Access keys", "Done"];
 
-const CHECKLIST: ReactNode[] = [
-  <>
-    SCG&apos;s NetSuite team has deployed the integration RESTlet <b>customscript_int_api</b> on the account you want to connect.
-  </>,
-  <>
-    A NetSuite admin created an <b>integration record</b> with Token-Based Authentication, and I have its <b>Consumer Key</b> and <b>Consumer Secret</b>.
-  </>,
-  <>
-    The admin created an <b>access token</b> for an integration user and role, and I have the <b>Token ID</b> and <b>Token Secret</b>.
-  </>,
-  <>
-    I know the <b>Account ID</b> (NetSuite Company ID), e.g. <span className="font-mono">1234567</span> or <span className="font-mono">1234567_SB1</span>.
-  </>,
+const NEEDS: { label: string; from: ReactNode }[] = [
+  { label: "Integration RESTlet", from: <>customscript_int_api, deployed by SCG&apos;s NetSuite team</> },
+  { label: "Account ID", from: <>e.g. <span className="font-mono">1234567</span> or <span className="font-mono">1234567_SB1</span></> },
+  { label: "Consumer Key & Secret", from: "From the integration record (TBA)" },
+  { label: "Token ID & Secret", from: "From an access token for the integration role" },
 ];
 
-export function NetSuiteOnboarding({ onChange, onExit }: { onChange: (s: PublicSettings) => void; onExit?: () => void }) {
+export function NetSuiteOnboarding({ onChange, onBack, onExit }: { onChange: (s: PublicSettings) => void; onBack?: () => void; onExit?: () => void }) {
   const [step, setStep] = useState(0);
-  const [checked, setChecked] = useState(() => CHECKLIST.map(() => false));
   const [name, setName] = useState("");
   const [acc, setAcc] = useState<AccountState>(() => initialAccount());
   const [keys, setKeys] = useState<KeyState>(blankKeys);
@@ -351,6 +333,11 @@ export function NetSuiteOnboarding({ onChange, onExit }: { onChange: (s: PublicS
   const keysComplete = Object.values(keys).every((x) => x.trim());
   const setA = (p: Partial<AccountState>) => (setAcc((s) => ({ ...s, ...p })), ts.reset());
   const setK = (p: Partial<KeyState>) => (setKeys((s) => ({ ...s, ...p })), ts.reset());
+  const back = (to: number) => (
+    <Button variant="ghost" onClick={() => setStep(to)}>
+      Back
+    </Button>
+  );
 
   const save = async (skipTest: boolean) => {
     const r = await ts.save({ ...bodyFrom(acc, keys), name }, skipTest);
@@ -363,136 +350,116 @@ export function NetSuiteOnboarding({ onChange, onExit }: { onChange: (s: PublicS
   };
 
   return (
-    <div className="mx-auto max-w-3xl">
-      <div className="mb-6 text-center">
-        <h2 className="text-2xl font-bold tracking-tight">Connect NetSuite</h2>
-        <p className="mt-1 text-sm text-slate-500">OAuth 1.0 Token-Based Authentication. The keys are saved on this server only.</p>
-      </div>
-      <Stepper steps={STEPS} step={step} />
-
-      <div className="rounded-2xl bg-white p-6 shadow-sm sm:p-8">
-        {step === 0 && (
-          <div className="space-y-5">
-            <div>
-              <h3 className="text-lg font-semibold">Before you start</h3>
-              <p className="text-sm text-slate-500">NetSuite uses five values. A NetSuite administrator creates them; tick each one you have.</p>
-            </div>
-            <Checklist items={CHECKLIST} checked={checked} onChange={setChecked} />
+    <Wizard title="Connect NetSuite" steps={STEPS} step={step} onClose={onExit}>
+      {step === 0 && (
+        <>
+          <StepTitle title="What you'll need" sub="A NetSuite administrator creates these." />
+          <NeedList items={NEEDS} />
+          <div className="mt-4">
             <NsAdminInstructions />
-            <div className="flex justify-between">
-              {onExit ? (
-                <Button variant="ghost" onClick={onExit}>
-                  Cancel
-                </Button>
-              ) : (
-                <span />
-              )}
-              <Button disabled={!checked.every(Boolean)} onClick={() => setStep(1)}>
-                Continue
-              </Button>
-            </div>
           </div>
-        )}
-
-        {step === 1 && (
-          <form
-            className="space-y-5"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setStep(2);
-            }}
+          <StepActions
+            back={
+              (onBack ?? onExit) && (
+                <Button variant="ghost" onClick={onBack ?? onExit}>
+                  Back
+                </Button>
+              )
+            }
           >
-            <div>
-              <h3 className="text-lg font-semibold">Which NetSuite account?</h3>
-              <p className="text-sm text-slate-500">Sandbox and Production are separate accounts with separate keys.</p>
-            </div>
-            <Field label="Connection name" hint="e.g. the business unit">
+            <Button onClick={() => setStep(1)}>Continue</Button>
+          </StepActions>
+        </>
+      )}
+
+      {step === 1 && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setStep(2);
+          }}
+        >
+          <StepTitle title="Which account?" sub="Sandbox and Production have separate keys." />
+          <div className="space-y-4">
+            <Field label="Connection name">
               <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. SCG NetSuite Sandbox" maxLength={40} />
             </Field>
             <AccountFields v={acc} set={setA} />
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep(0)}>
-                Back
-              </Button>
-              <Button type="submit" disabled={!name.trim() || !accountId}>
-                Continue
-              </Button>
-            </div>
-          </form>
-        )}
+          </div>
+          <StepActions back={back(0)}>
+            <Button type="submit" disabled={!name.trim() || !accountId}>
+              Continue
+            </Button>
+          </StepActions>
+        </form>
+      )}
 
-        {step === 2 && (
-          <form
-            className="space-y-5"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void save(false);
-            }}
-          >
-            <div>
-              <h3 className="text-lg font-semibold">Access keys</h3>
-              <p className="text-sm text-slate-500">
-                Paste the four values for <span className="font-mono">{accountId}</span>. They sign every request (HMAC-SHA256) and are never sent to the browser
-                again.
-              </p>
-            </div>
+      {step === 2 && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save(false);
+          }}
+        >
+          <StepTitle
+            title="Access keys"
+            sub={
+              <>
+                For <span className="font-mono text-slate-700">{accountId}</span>
+              </>
+            }
+          />
+          <div className="space-y-4">
             <KeyFields v={keys} set={setK} />
             {ts.result && <TestResultAlert result={ts.result} />}
             {ts.error && <Alert kind="err">{ts.error}</Alert>}
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="ghost" onClick={() => setStep(1)}>
-                Back
-              </Button>
-              <div className="ml-auto flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={() => ts.test(bodyFrom(acc, keys))} loading={ts.busy === "test"} disabled={ts.busy !== null || !keysComplete}>
-                  Test connection
-                </Button>
-                {ts.canForce && (
-                  <Button variant="ghost" onClick={() => save(true)} disabled={ts.busy !== null}>
-                    Save anyway
-                  </Button>
-                )}
-                <Button type="submit" loading={ts.busy === "save"} disabled={ts.busy !== null || !keysComplete}>
-                  Test and save
-                </Button>
-              </div>
-            </div>
-            {TEST_NOTE}
-          </form>
-        )}
-
-        {step === 3 && added && (
-          <div className="space-y-5 text-center">
-            <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-green-100 text-2xl text-green-700">✓</div>
-            <div>
-              <h3 className="text-lg font-semibold">“{added.name}” is saved</h3>
-              <p className="text-sm text-slate-500">
-                {added.test ? "The connection test passed." : "Saved without a passing test. Use Test in Settings once NetSuite access is ready."}
-              </p>
-            </div>
-            {added.test && (
-              <div className="mx-auto max-w-lg text-left">
-                <TestResultAlert result={added.test} />
-              </div>
-            )}
-            <Alert kind="info">
-              “{added.name}” is now a tab on the dashboard (marked NS). Its AR comes from endpoint #46 <code>invoicefromso_lhs</code>: due date, status and
-              remaining amount per invoice.
-            </Alert>
-            <div className="flex flex-wrap justify-center gap-2">
-              {onExit && (
-                <Button variant="secondary" onClick={onExit}>
-                  Back to NetSuite settings
-                </Button>
-              )}
-              <Link href="/" className="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark">
-                Open dashboard
-              </Link>
-            </div>
           </div>
-        )}
-      </div>
-    </div>
+          <StepActions back={back(1)}>
+            {ts.canForce && (
+              <Button variant="ghost" onClick={() => save(true)} disabled={ts.busy !== null}>
+                Save anyway
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              onClick={() => ts.test(bodyFrom(acc, keys))}
+              loading={ts.busy === "test"}
+              disabled={ts.busy !== null || !keysComplete}
+              title="Only reads from NetSuite"
+            >
+              Test
+            </Button>
+            <Button type="submit" loading={ts.busy === "save"} disabled={ts.busy !== null || !keysComplete}>
+              Test and save
+            </Button>
+          </StepActions>
+        </form>
+      )}
+
+      {step === 3 && added && (
+        <>
+          <DoneHeader title={`${added.name} is connected`} sub={added.test ? "It's now a tab on the dashboard." : "Saved without a passing test. Test it in Settings later."} />
+          {added.test && (
+            <div className="mx-auto max-w-lg">
+              <TestResultAlert result={added.test} />
+            </div>
+          )}
+          <StepActions
+            back={
+              onExit && (
+                <Button variant="ghost" onClick={onExit}>
+                  Back to settings
+                </Button>
+              )
+            }
+          >
+            <Link href="/" className="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-dark">
+              Open dashboard
+            </Link>
+          </StepActions>
+        </>
+      )}
+    </Wizard>
   );
 }
 
@@ -527,23 +494,17 @@ function NetSuiteEditForm({ connection, onSaved, onCancel }: { connection: Publi
       <KeyFields v={keys} set={setK} saved={connection} />
       {ts.result && <TestResultAlert result={ts.result} />}
       {ts.error && <Alert kind="err">{ts.error}</Alert>}
-      <div className="flex flex-wrap items-center gap-2 pt-1">
-        <Button type="submit" loading={ts.busy === "save"} disabled={ts.busy !== null || !name.trim() || !accountId}>
-          Save changes
-        </Button>
-        <Button variant="secondary" onClick={() => ts.test(bodyFrom(acc, keys))} loading={ts.busy === "test"} disabled={ts.busy !== null || !accountId}>
-          Test connection
-        </Button>
-        {ts.canForce && (
-          <Button variant="ghost" onClick={() => save(true)} disabled={ts.busy !== null}>
-            Save anyway
-          </Button>
-        )}
-        <Button variant="ghost" onClick={onCancel} className="ml-auto">
-          Cancel
-        </Button>
-      </div>
-      {TEST_NOTE}
+      <FormActions
+        onCancel={onCancel}
+        busy={ts.busy}
+        canForce={ts.canForce}
+        onForce={() => save(true)}
+        onTest={() => ts.test(bodyFrom(acc, keys))}
+        testDisabled={!accountId}
+        testTitle="Only reads from NetSuite"
+        saveLabel="Save changes"
+        saveDisabled={!name.trim() || !accountId}
+      />
     </form>
   );
 }
