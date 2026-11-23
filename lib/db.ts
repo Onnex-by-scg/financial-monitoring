@@ -36,13 +36,47 @@ const noDatabase = new Proxy({} as PrismaClient, {
 // ---- Cloudflare Workers: one client per request ----
 const perRequest = new WeakMap<object, PrismaClient>();
 
+let loggedHost = false;
+
+/** Fails with a readable message when DATABASE_URL can't be a Postgres URL, and logs (once) where it points,
+ *  without the password, so the Worker's logs show which host it tries. */
+function checkConnectionString(value: string): void {
+  let url: URL | null = null;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    // reported below
+  }
+  if (!url || !/^postgres(ql)?:$/.test(url.protocol) || !url.hostname) {
+    throw new Error(
+      "DATABASE_URL on this Worker isn't a valid connection string. It should look like " +
+        "postgresql://postgres.<project-ref>:<password>@<pooler-host>:6543/postgres, with no quotes or `DATABASE_URL=` " +
+        "in front, and with @ # / : % in the password URL-encoded.",
+    );
+  }
+  if (!loggedHost) {
+    loggedHost = true;
+    console.log(`Database: connecting to ${url.hostname}:${url.port || "5432"} as ${decodeURIComponent(url.username)}`);
+  }
+}
+
 function requestClient(): PrismaClient {
   const { env, ctx } = getCloudflareContext();
   let client = perRequest.get(ctx as object);
   if (!client) {
     const hyperdrive = (env as { HYPERDRIVE?: { connectionString: string } }).HYPERDRIVE;
+    const connectionString = hyperdrive?.connectionString ?? process.env.DATABASE_URL;
+    // Without one, the client would try localhost, which Workers refuse with an unhelpful
+    // "proxy request failed, cannot connect to the specified address".
+    if (!connectionString) {
+      throw new Error(
+        "DATABASE_URL is not set on this Worker. Add it as a secret (Supabase's transaction pooler string, port 6543): " +
+          "`npx wrangler secret put DATABASE_URL`, or the Worker's Settings → Variables and Secrets. A build variable isn't enough.",
+      );
+    }
+    if (!hyperdrive) checkConnectionString(connectionString);
     // A small pool: a request runs a few queries at once at most, and Workers allow only a few open sockets.
-    client = createClient(hyperdrive?.connectionString ?? DATABASE_URL, 3);
+    client = createClient(connectionString, 3);
     perRequest.set(ctx as object, client);
   }
   return client;
