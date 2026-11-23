@@ -1,13 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { SYNC_MAX_MINUTES, SYNC_MIN_MINUTES, type SyncRunView, type SyncStatusView } from "@/lib/settings-types";
+import {
+  PAGE_WAIT_MAX_SECONDS,
+  PEAK_PAGE_SIZE_MAX,
+  PEAK_PAGE_SIZE_MIN,
+  SYNC_MAX_MINUTES,
+  SYNC_MIN_MINUTES,
+  type SyncRunView,
+  type SyncStatusView,
+} from "@/lib/settings-types";
 import { api, timeAgo } from "./api";
 import { Alert, Button, Card, Toggle } from "./ui";
 
 // Settings → Data sync: how often the sync service pulls PEAK / NetSuite into the database, plus its status.
 
 const PRESETS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
+const PAGE_SIZE_PRESETS = [10, 25, 50, 100];
+const WAIT_PRESETS = [0, 2, 5, 10, 30];
+
+type Form = { enabled: boolean; intervalMinutes: number; skipClosedUat: boolean; peakPageSize: number; pageWaitSeconds: number };
 
 export function minutesLabel(m: number): string {
   if (m < 60) return `${m} min`;
@@ -20,7 +32,7 @@ const clock = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "num
 export function SyncSection() {
   const [status, setStatus] = useState<SyncStatusView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [form, setForm] = useState<{ enabled: boolean; intervalMinutes: number; skipClosedUat: boolean } | null>(null);
+  const [form, setForm] = useState<Form | null>(null);
   const [custom, setCustom] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -30,7 +42,16 @@ export function SyncSection() {
     try {
       const s = await api.syncStatus();
       setStatus(s);
-      setForm((f) => f ?? { enabled: s.config.enabled, intervalMinutes: s.config.intervalMinutes, skipClosedUat: s.config.skipClosedUat });
+      setForm(
+        (f) =>
+          f ?? {
+            enabled: s.config.enabled,
+            intervalMinutes: s.config.intervalMinutes,
+            skipClosedUat: s.config.skipClosedUat,
+            peakPageSize: s.config.peakPageSize,
+            pageWaitSeconds: s.config.pageWaitSeconds,
+          },
+      );
       setLoadError(null);
     } catch (e) {
       setLoadError((e as Error).message);
@@ -53,7 +74,18 @@ export function SyncSection() {
   if (!status || !form) return <div className="h-64 animate-pulse rounded-2xl bg-white" />;
 
   const saved = status.config;
-  const dirty = form.enabled !== saved.enabled || form.intervalMinutes !== saved.intervalMinutes || form.skipClosedUat !== saved.skipClosedUat;
+  const dirty =
+    form.enabled !== saved.enabled ||
+    form.intervalMinutes !== saved.intervalMinutes ||
+    form.skipClosedUat !== saved.skipClosedUat ||
+    form.peakPageSize !== saved.peakPageSize ||
+    form.pageWaitSeconds !== saved.pageWaitSeconds;
+  const fetchValid =
+    Number.isInteger(form.peakPageSize) &&
+    form.peakPageSize >= PEAK_PAGE_SIZE_MIN &&
+    form.peakPageSize <= PEAK_PAGE_SIZE_MAX &&
+    form.pageWaitSeconds >= 0 &&
+    form.pageWaitSeconds <= PAGE_WAIT_MAX_SECONDS;
   const customMinutes = Number(custom);
   const customValid = custom === "" || (Number.isFinite(customMinutes) && customMinutes >= SYNC_MIN_MINUTES && customMinutes <= SYNC_MAX_MINUTES);
   const hasNetSuite = status.tabs.some((t) => t.provider === "netsuite");
@@ -89,6 +121,7 @@ export function SyncSection() {
   return (
     <div className="space-y-4">
       <Card
+        eyebrow="Connections"
         title="Data sync"
       >
         {status.blockedBy && (
@@ -171,8 +204,10 @@ export function SyncSection() {
             />
           )}
 
+          <ArFetch form={form} setForm={setForm} hasPeak={hasPeak} hasNetSuite={hasNetSuite} />
+
           <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-4">
-            <Button onClick={save} loading={saving} disabled={!dirty || !customValid}>
+            <Button onClick={save} loading={saving} disabled={!dirty || !customValid || !fetchValid}>
               Save
             </Button>
             {dirty && <span className="text-xs text-slate-500">Unsaved changes</span>}
@@ -308,3 +343,136 @@ function duration(ms: number): string {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
 }
+
+// ---------- AR fetch: page size and spacing ----------
+
+/** One row of preset chips plus a custom number box. */
+function NumberChoice({
+  label,
+  presets,
+  value,
+  onChange,
+  format,
+  min,
+  max,
+  unit,
+}: {
+  label: string;
+  presets: number[];
+  value: number;
+  onChange: (n: number) => void;
+  format: (n: number) => string;
+  min: number;
+  max: number;
+  unit: string;
+}) {
+  const [custom, setCustom] = useState(presets.includes(value) ? "" : String(value));
+  const n = Number(custom);
+  const customValid = custom === "" || (Number.isInteger(n) && n >= min && n <= max);
+  return (
+    <div>
+      <p className="mb-2 text-sm font-medium text-slate-800">{label}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        {presets.map((p) => {
+          const on = value === p && custom === "";
+          return (
+            <button
+              key={p}
+              type="button"
+              aria-pressed={on}
+              onClick={() => {
+                setCustom("");
+                onChange(p);
+              }}
+              className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                on ? "border-brand bg-brand text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {format(p)}
+            </button>
+          );
+        })}
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          or
+          <input
+            type="number"
+            inputMode="numeric"
+            min={min}
+            max={max}
+            value={custom}
+            placeholder="custom"
+            onChange={(e) => {
+              setCustom(e.target.value);
+              const v = Number(e.target.value);
+              if (Number.isInteger(v) && v >= min && v <= max) onChange(v);
+            }}
+            aria-label={`${label}, custom`}
+            className={`w-24 rounded-lg border bg-white px-2.5 py-1.5 text-sm shadow-sm outline-none focus:ring-4 focus:ring-brand/15 ${
+              customValid ? "border-slate-300 focus:border-brand" : "border-red-400"
+            }`}
+          />
+          {unit}
+        </label>
+      </div>
+      {!customValid && (
+        <p className="mt-1.5 text-xs text-red-600">
+          {min}–{max} {unit}.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ArFetch({
+  form,
+  setForm,
+  hasPeak,
+  hasNetSuite,
+}: {
+  form: Form;
+  setForm: (f: Form) => void;
+  hasPeak: boolean;
+  hasNetSuite: boolean;
+}) {
+  // A worked example, so the effect of small pages plus a wait is visible before saving.
+  const exampleInvoices = 300;
+  const pages = Math.ceil(exampleInvoices / form.peakPageSize);
+  const waiting = Math.max(0, pages - 1) * form.pageWaitSeconds;
+  return (
+    <div className="space-y-4 rounded-xl border border-slate-200/80 p-4">
+      <p className="text-sm font-semibold text-slate-900">AR fetch</p>
+      {hasPeak && (
+        <NumberChoice
+          label="Invoices per page (PEAK)"
+          presets={PAGE_SIZE_PRESETS}
+          value={form.peakPageSize}
+          onChange={(peakPageSize) => setForm({ ...form, peakPageSize })}
+          format={(n) => String(n)}
+          min={PEAK_PAGE_SIZE_MIN}
+          max={PEAK_PAGE_SIZE_MAX}
+          unit="rows"
+        />
+      )}
+      <NumberChoice
+        label="Wait between pages"
+        presets={WAIT_PRESETS}
+        value={form.pageWaitSeconds}
+        onChange={(pageWaitSeconds) => setForm({ ...form, pageWaitSeconds })}
+        format={(n) => (n === 0 ? "None" : `${n} s`)}
+        min={0}
+        max={PAGE_WAIT_MAX_SECONDS}
+        unit="seconds"
+      />
+      <div className="space-y-1 text-xs text-slate-500">
+        {hasPeak && (
+          <p>
+            {exampleInvoices} PEAK invoices → {pages} pages
+            {waiting > 0 ? `, about ${waiting >= 60 ? `${Math.round(waiting / 6) / 10} min` : `${waiting} s`} of waiting` : ""}.
+          </p>
+        )}
+        {hasNetSuite && <p>NetSuite pages are fixed at 1,000 invoices by its API; the wait applies between them.</p>}
+      </div>
+    </div>
+  );
+}
+

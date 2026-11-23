@@ -35,23 +35,117 @@ export function currentActivity(p: SyncProgressView): string {
   return active.map((s) => [s.label, count(s)].filter(Boolean).join(" · ")).join("  ·  ");
 }
 
+/**
+ * The pull progress bar used everywhere a pull shows progress: brand gradient fill that eases to each new value,
+ * a light shimmer sweeping across it, and a soft glow at the leading edge. `value` null = not reported yet
+ * (a segment slides across instead).
+ */
+export function ProgressBar({
+  value,
+  label,
+  size = "md",
+  className = "",
+}: {
+  value: number | null;
+  label: string;
+  size?: "xs" | "sm" | "md";
+  className?: string;
+}) {
+  const h = size === "md" ? "h-2.5" : size === "sm" ? "h-1.5" : "h-[3px]";
+  return (
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={value ?? undefined}
+      className={`relative w-full overflow-hidden rounded-full bg-slate-200/70 ${h} ${className}`}
+    >
+      {value === null ? (
+        <div className="ci-bar progress-slide absolute inset-y-0 left-0 w-1/3 rounded-full" />
+      ) : (
+        <div
+          className="ci-bar relative h-full overflow-hidden rounded-full shadow-[0_0_10px_rgba(3,191,215,0.45)] transition-[width] duration-700 ease-out"
+          style={{ width: `${Math.max(2, Math.min(100, value))}%` }}
+        >
+          <span className="progress-shimmer absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/55 to-transparent" aria-hidden />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The line under a dashboard header: the brand gradient normally, a live progress line while a pull runs
+ * (visible wherever the page is scrolled, since the header is sticky).
+ */
+export function HeaderProgress({ active, progress, source }: { active: boolean; progress: SyncProgressView | null; source: string }) {
+  if (!active) return <div className="ci-bar h-[3px]" aria-hidden />;
+  return <ProgressBar value={progress ? progressPercent(progress) : null} label={`Pulling from ${source}`} size="xs" className="rounded-none bg-slate-100" />;
+}
+
+/** Shown above the data while a pull refreshes it in the background: one line, a bar, and the saved time. */
+export function RefreshBanner({ source, progress, savedAt }: { source: string; progress: SyncProgressView | null; savedAt: string }) {
+  const pct = progress ? progressPercent(progress) : null;
+  return (
+    <div role="status" className="rise-in rounded-2xl border border-slate-200/70 bg-white/95 px-5 py-4 shadow-xl shadow-slate-900/10 backdrop-blur">
+      <div className="flex items-center gap-3">
+        <span className="size-4 shrink-0 animate-spin rounded-full border-2 border-brand/20 border-t-brand" aria-hidden />
+        <p className="min-w-0 flex-1 truncate text-sm">
+          <span className="font-semibold text-slate-900">Updating from {source}</span>
+          <span className="text-slate-500"> · {progress ? currentActivity(progress) : "starting…"}</span>
+        </p>
+        {pct !== null && <span className="text-sm font-semibold text-slate-700 tabular-nums">{pct}%</span>}
+      </div>
+      <ProgressBar value={pct} label={`Updating from ${source}`} size="sm" className="mt-2.5" />
+      <p className="mt-1.5 text-[11px] text-slate-400">Showing data saved {savedAt}</p>
+    </div>
+  );
+}
+
+/**
+ * Wraps a dashboard's content. While a pull refreshes it, the saved data is dimmed, blurred and locked
+ * (not clickable, skipped by keyboard and screen readers), and the progress card floats on top, staying in
+ * view while scrolling. When the pull ends, the fresh data fades back in.
+ */
+export function RefreshVeil({
+  active,
+  source,
+  progress,
+  savedAt,
+  children,
+}: {
+  active: boolean;
+  source: string;
+  progress: SyncProgressView | null;
+  savedAt: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative" aria-busy={active || undefined}>
+      <div
+        inert={active || undefined}
+        className={`transition-[opacity,filter] duration-500 ${active ? "pointer-events-none opacity-35 blur-[3px] select-none" : ""}`}
+      >
+        {children}
+      </div>
+      {active && (
+        <div className="absolute inset-0 z-20 flex justify-center">
+          <div className="sticky top-28 h-fit w-full max-w-lg px-4 pt-16">
+            <RefreshBanner source={source} progress={progress} savedAt={savedAt} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SyncProgress({ progress, source, compact = false }: { progress: SyncProgressView; source: string; compact?: boolean }) {
   const pct = progressPercent(progress);
   const stepNo = progress.steps.findIndex((s) => s.status === "active" || s.status === "pending") + 1 || progress.steps.length;
   const header = `Pulling from ${source} · step ${stepNo} of ${progress.steps.length} · ${progress.seconds} s`;
 
-  const bar = (
-    <div
-      role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={pct}
-      aria-label={`Pulling from ${source}`}
-      className="h-2 overflow-hidden rounded-full bg-slate-200"
-    >
-      <div className="h-full rounded-full bg-brand transition-[width] duration-500" style={{ width: `${pct}%` }} />
-    </div>
-  );
+  const bar = <ProgressBar value={pct} label={`Pulling from ${source}`} size="sm" />;
 
   if (compact) {
     return (
@@ -83,6 +177,37 @@ export function SyncProgress({ progress, source, compact = false }: { progress: 
       </p>
       {progress.note && <p className="mt-1 text-xs text-amber-700">{progress.note}</p>}
       <StepList progress={progress} />
+    </div>
+  );
+}
+
+/**
+ * The card shown while a tab's first pull runs: spinner, one line of what's happening, and a progress bar
+ * (sliding until the server reports progress). The step list is folded away under "Details".
+ */
+export function FirstPullCard({ source, progress }: { source: string; progress: SyncProgressView | null }) {
+  const pct = progress ? progressPercent(progress) : null;
+  return (
+    <div className="mx-auto w-full max-w-md rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm" aria-busy>
+      <div className="flex items-center gap-4">
+        <span className="size-9 shrink-0 animate-spin rounded-full border-[3px] border-brand/15 border-t-brand" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-slate-900">Loading {source} data</p>
+          <p className="truncate text-xs text-slate-500" aria-live="polite">
+            {progress ? `${currentActivity(progress)} · ${progress.seconds} s` : "Connecting…"}
+          </p>
+        </div>
+        {pct !== null && <span className="text-sm font-semibold text-slate-700 tabular-nums">{pct}%</span>}
+      </div>
+
+      <ProgressBar value={pct} label={`Loading ${source} data`} className="mt-5" />
+
+      {progress && (
+        <details className="mt-4 text-xs text-slate-500">
+          <summary className="cursor-pointer select-none hover:text-slate-700">Details</summary>
+          <StepList progress={progress} />
+        </details>
+      )}
     </div>
   );
 }

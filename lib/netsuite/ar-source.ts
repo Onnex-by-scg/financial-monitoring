@@ -4,6 +4,7 @@ import { hash, mapLimit, PeakError } from "../peak/client";
 import type { StoredNetSuite } from "../peak/settings-store";
 import { nsKind } from "../settings-types";
 import { noProgress, type Reporter } from "../sync/progress";
+import { makePacer, noPacer, type Pacer } from "../sync/pacing";
 import { NS_SCRIPT_2, nsGet, restletHost } from "./client";
 
 // Outstanding AR from NetSuite, via SCG's RESTlet endpoint #46 "Query Invoice From SO + Apply Deposit"
@@ -58,8 +59,10 @@ export async function loadNetSuiteAr(
   entities: ArEntity[],
   prev: NsSyncState | null,
   progress: Reporter = noProgress,
+  /** Seconds between page reads (Settings → Data sync). NetSuite's page size itself is fixed at 1,000 by #46. */
+  pageWaitMs = 0,
 ): Promise<{ data: ArResponse; sync: NsSyncState }> {
-  return load(conn, entities, prev, progress);
+  return load(conn, entities, prev, progress, pageWaitMs > 0 ? makePacer(pageWaitMs) : noPacer);
 }
 
 /** Paths shown in the Debug panel (host is in debug.baseUrl). */
@@ -87,6 +90,7 @@ async function load(
   entities: ArEntity[],
   prev: NsSyncState | null,
   progress: Reporter,
+  pacer: Pacer,
 ): Promise<{ data: ArResponse; sync: NsSyncState }> {
   const calls: ApiCall[] = [];
   const warnings: string[] = [];
@@ -128,7 +132,8 @@ async function load(
   };
 
   const fetchPage = async (page: number) => {
-    const list = await request({ "query[current_page]": String(page) }, "ns-invoices", PAGE_TIMEOUT_MS);
+    // Through the pacer: with a wait set, pages go one at a time with the wait in between.
+    const list = await pacer.run(() => request({ "query[current_page]": String(page) }, "ns-invoices", PAGE_TIMEOUT_MS));
     progress.tick(pageStep);
     return list;
   };

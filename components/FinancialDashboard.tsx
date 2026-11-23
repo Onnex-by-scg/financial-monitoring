@@ -6,8 +6,9 @@ import { fmtAcct, fmtDateTime, fmtMillions, PNL_COLORS } from "@/lib/format";
 import { explainLoadError } from "@/lib/load-error";
 import { addTotals, MONTH_SHORT, PNL_LABEL, PNL_LINES, summarizePnl, type PnlLine, type PnlResponse } from "@/lib/pnl";
 import { AppNav } from "./AppNav";
+import { CompanySwitcher } from "./CompanySwitcher";
 import { ProfitBars, QuarterBars, RevenueMarginChart, Waterfall, type WaterfallStep } from "./pnl-charts";
-import { progressPercent, SyncProgress, useSyncProgress, type SyncProgressView } from "./SyncProgress";
+import { FirstPullCard, HeaderProgress, progressPercent, RefreshVeil, useSyncProgress, type SyncProgressView } from "./SyncProgress";
 
 // Financial Performance: monthly P&L for one PEAK company. Read from the database, which the sync service fills from
 // PEAK's trial balance (lib/sync/pnl-sync.ts).
@@ -87,8 +88,24 @@ export default function FinancialDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-30 bg-white/95 shadow-sm backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-6 gap-y-3 px-6 py-3">
+      <header className="sticky top-0 z-30 bg-white/95 shadow-sm backdrop-blur" style={{ viewTransitionName: "site-header" }}>
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-start gap-x-5 gap-y-3 px-6 py-3 md:flex-nowrap">
+          <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-x-5 gap-y-3 md:basis-0">
+          {tabs && tabs.length > 0 && (
+            <>
+              <CompanySwitcher
+                items={tabs.map((t) => ({
+                  id: t.id,
+                  name: t.name,
+                  provider: t.provider,
+                  disabledReason: t.provider === "netsuite" ? "No profit & loss in NetSuite's API" : undefined,
+                }))}
+                value={activeEntity}
+                onChange={setEntity}
+              />
+              <span className="hidden h-8 w-px bg-slate-200 xl:block" aria-hidden />
+            </>
+          )}
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
               <span className="text-brand">Financial</span> <span className="text-aqua">·</span> Performance
@@ -98,37 +115,14 @@ export default function FinancialDashboard() {
             </p>
           </div>
 
-          <nav aria-label="Company" className={`flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1 ${tabs?.length ? "" : "hidden"}`}>
-            {(tabs ?? []).map((t) => {
-              const on = t.id === activeEntity;
-              const disabled = t.provider === "netsuite";
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  disabled={disabled}
-                  title={disabled ? "NetSuite's integration API has no profit & loss or trial-balance endpoint" : undefined}
-                  onClick={() => setEntity(t.id)}
-                  aria-pressed={on}
-                  className={`rounded-md px-4 py-1.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                    on ? "bg-brand text-white shadow" : "text-slate-600 hover:bg-white hover:text-slate-900"
-                  }`}
-                >
-                  {t.name}
-                  {disabled && <span className="ml-1.5 rounded bg-slate-200 px-1 py-px align-middle text-[10px] font-bold text-slate-600">NS</span>}
-                </button>
-              );
-            })}
-          </nav>
 
           <div className="ml-auto flex flex-wrap items-center gap-3">
-            <AppNav />
             <label className="flex items-center gap-2 text-sm text-slate-600">
               Year
               <select
                 value={year ?? data?.year ?? ""}
                 onChange={(e) => setYear(Number(e.target.value))}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm font-medium text-slate-900"
+                className="h-[34px] rounded-md border border-slate-300 bg-white px-2 text-sm font-medium text-slate-900"
               >
                 {years.map((y) => (
                   <option key={y}>{y}</option>
@@ -149,8 +143,14 @@ export default function FinancialDashboard() {
               Settings
             </Link>
           </div>
+          </div>
+          {/* The page switch has its own slot, outside the wrapping row above, so nothing on the page can move it:
+              top-right on wide screens, first row on phones. Same on every dashboard page (the active tab glides). */}
+          <div className="order-first w-full md:order-none md:mt-2 md:w-auto md:shrink-0">
+            <AppNav />
+          </div>
         </div>
-        <div className="ci-bar h-1" aria-hidden />
+        <HeaderProgress active={Boolean(refreshing || progress)} progress={progress} source="PEAK" />
       </header>
 
       <main className="mx-auto max-w-[1600px] space-y-5 px-6 py-5">
@@ -168,20 +168,6 @@ export default function FinancialDashboard() {
           </div>
         )}
         {!error && data?.syncError && !refreshing && <SyncErrorNote error={data.syncError} onRetry={() => load(true)} />}
-        {refreshing && data && (
-          <div role="status" className="rounded-xl border border-brand/25 bg-brand-soft px-4 py-3 text-sm text-brand-dark">
-            <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-              <p className="max-w-md">
-                Showing the months saved before. Pulling the latest from PEAK; the page updates itself when it&apos;s done.
-              </p>
-              {progress ? (
-                <SyncProgress progress={progress} source="PEAK" compact />
-              ) : (
-                <span className="size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent" aria-hidden />
-              )}
-            </div>
-          </div>
-        )}
         {data?.warnings.map((w) => (
           <div key={w} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             {w}
@@ -192,6 +178,7 @@ export default function FinancialDashboard() {
         {view && data && view.months.length === 0 && <div className="rounded-xl bg-white p-8 text-center text-slate-500 shadow-sm">No months to show for {data.year}.</div>}
 
         {view && data && view.months.length > 0 && (
+          <RefreshVeil active={refreshing} source="PEAK" progress={progress} savedAt={fmtDateTime(data.fetchedAt)}>
           <div className={`space-y-5 ${loading ? "opacity-60" : ""}`}>
             {/* KPI tiles */}
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -249,6 +236,7 @@ export default function FinancialDashboard() {
 
             <AccountsCard data={data} />
           </div>
+          </RefreshVeil>
         )}
       </main>
 
@@ -450,20 +438,7 @@ function SyncErrorNote({ error, onRetry }: { error: { message: string; status: n
 function Skeleton({ progress }: { progress: SyncProgressView | null }) {
   return (
     <div className="space-y-5" aria-busy>
-      <div className="mx-auto w-full max-w-xl rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm">
-        <h2 className="text-base font-semibold text-slate-900">First pull from PEAK</h2>
-        <p className="mt-1 text-sm text-slate-500">These months aren&apos;t saved yet, so they&apos;re being read now. Next time the page opens instantly.</p>
-        <div className="mt-4">
-          {progress ? (
-            <SyncProgress progress={progress} source="PEAK" />
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <span className="size-4 animate-spin rounded-full border-2 border-brand border-r-transparent" aria-hidden />
-              Loading…
-            </div>
-          )}
-        </div>
-      </div>
+      <FirstPullCard source="PEAK" progress={progress} />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {[0, 1, 2, 3].map((i) => (
           <div key={i} className="h-24 animate-pulse rounded-xl bg-white shadow-sm" />

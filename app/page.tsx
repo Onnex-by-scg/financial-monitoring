@@ -1,5 +1,10 @@
 import ArDashboard from "@/components/ArDashboard";
+import { PageTransition } from "@/components/PageTransition";
 
 export default function Home() {
-  return <ArDashboard />;
+  return (
+    <PageTransition>
+      <ArDashboard />
+    </PageTransition>
+  );
 }

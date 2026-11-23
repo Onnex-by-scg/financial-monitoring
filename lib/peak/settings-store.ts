@@ -65,6 +65,10 @@ export interface SyncSettings {
   intervalMinutes: number;
   /** Skip scheduled pulls of PEAK UAT outside Mon–Fri 08:00–22:00 Bangkok. */
   skipClosedUat: boolean;
+  /** Rows per PEAK list page (1–100). Absent = 100. */
+  peakPageSize?: number;
+  /** Seconds between page requests (0–60). Absent = 0. */
+  pageWaitSeconds?: number;
 }
 
 type Source = "sample" | "db" | "file" | "env" | "none";

@@ -83,12 +83,22 @@ export const BASE_URLS_PUBLIC: Record<PeakEnvName, string> = {
 export const SYNC_MIN_MINUTES = 5;
 export const SYNC_MAX_MINUTES = 24 * 60;
 
+/** AR fetch pacing (Settings → Data sync). Defaults keep the original behaviour: PEAK's maximum page, no wait. */
+export const PEAK_PAGE_SIZE_MIN = 1;
+export const PEAK_PAGE_SIZE_MAX = 100; // PEAK's maximum `limit`
+export const PEAK_PAGE_SIZE_DEFAULT = 100;
+export const PAGE_WAIT_MAX_SECONDS = 60;
+
 export interface SyncConfigView {
   enabled: boolean;
   intervalMinutes: number;
   skipClosedUat: boolean;
   /** false = not saved in Settings yet (defaults / SYNC_INTERVAL_MINUTES). */
   fromSettings: boolean;
+  /** Rows per page when reading PEAK lists (invoices, customers). NetSuite's page size is fixed at 1,000 by its API. */
+  peakPageSize: number;
+  /** Seconds to wait between page requests (PEAK and NetSuite). 0 = no wait. */
+  pageWaitSeconds: number;
 }
 
 export interface SyncRunView {

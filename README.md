@@ -116,6 +116,8 @@ Each chart and headline card has a **</> Debug** button. It opens a panel showin
 
 The plotted data follows the active filters. In sample mode no calls are listed.
 
+Debug buttons appear in development (`pnpm dev`, `pnpm dev:sample`) and are hidden in production builds (`next build`, Netlify). To show them in a production build, set `NEXT_PUBLIC_SHOW_DEBUG=1` before building.
+
 Slicers (customer, project, AR group, aging bucket, search) and clicks on the charts and tables filter the whole page. Business-unit tabs switch between PEAK businesses.
 
 ## How the PEAK data is pulled

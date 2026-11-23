@@ -20,16 +20,16 @@ export function Onboarding({ settings, onChange, onExit }: { settings: PublicSet
   if (source === "peak") return <PeakOnboarding settings={settings} onChange={onChange} onBack={back} onNetSuite={() => setSource("netsuite")} onExit={onExit} />;
   if (source === "netsuite") return <NetSuiteOnboarding onChange={onChange} onBack={back} onExit={onExit} />;
 
-  const sources: { key: Source; name: string; mark: string; markCls: string; what: string; count: number }[] = [
-    { key: "peak", name: "PEAK", mark: "PK", markCls: "bg-brand", what: "AR and Financial Performance", count: settings.companies.length },
-    { key: "netsuite", name: "NetSuite", mark: "NS", markCls: "bg-[#1f3b57]", what: "AR from SCG's integration RESTlet", count: settings.netsuite.length },
+  const sources: { key: Source; name: string; what: string; count: number }[] = [
+    { key: "peak", name: "PEAK", what: "AR aging and Financial Performance, read with the company's PEAK User Token.", count: settings.companies.length },
+    { key: "netsuite", name: "NetSuite", what: "AR aging from SCG's NetSuite integration, read with a NetSuite access token.", count: settings.netsuite.length },
   ];
 
   return (
     <div className="mx-auto max-w-2xl">
       <div className="mb-8 text-center">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Connect a data source</h1>
-        <p className="mt-1 text-sm text-slate-500">Each connection becomes a tab on the dashboard.</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Add a company</h1>
+        <p className="mt-1 text-sm text-slate-500">Where does its data come from? Each company becomes a tab on the dashboard.</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {sources.map((s) => (
@@ -39,14 +39,11 @@ export function Onboarding({ settings, onChange, onExit }: { settings: PublicSet
             onClick={() => setSource(s.key)}
             className="group rounded-2xl border border-slate-200/70 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-md focus-visible:ring-4 focus-visible:ring-brand/15 focus-visible:outline-none"
           >
-            <div className="flex items-center justify-between">
-              <span className={`flex size-10 items-center justify-center rounded-xl text-[11px] font-black tracking-tight text-white ${s.markCls}`} aria-hidden>
-                {s.mark}
-              </span>
-              {s.count > 0 && <span className="rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 ring-1 ring-green-600/15">{s.count} connected</span>}
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-base font-semibold text-slate-900">{s.name}</p>
+              {s.count > 0 && <span className="text-xs text-slate-400">{s.count} added</span>}
             </div>
-            <p className="mt-4 text-base font-semibold text-slate-900">{s.name}</p>
-            <p className="mt-0.5 text-sm text-slate-500">{s.what}</p>
+            <p className="mt-1.5 text-sm leading-relaxed text-slate-500">{s.what}</p>
             <p className="mt-4 text-sm font-semibold text-brand opacity-80 transition group-hover:opacity-100">{s.count ? "Add another" : "Set up"}</p>
           </button>
         ))}

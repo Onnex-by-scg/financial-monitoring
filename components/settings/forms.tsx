@@ -168,7 +168,7 @@ export function OwnerInstructions({ defaultOpen = false }: { defaultOpen?: boole
           setTimeout(() => setCopied(false), 1500);
         }}
       >
-        {copied ? "Copied ✓" : "Copy instructions"}
+        {copied ? "Copied" : "Copy instructions"}
       </Button>
     </details>
   );

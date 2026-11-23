@@ -4,8 +4,10 @@ import { SAMPLE_ENTITIES } from "./sample";
 // Settings for sample mode (lib/mode.ts): the same companies the sample dashboard shows, plus one NetSuite
 // connection so every Settings section has something to show. All keys are fake and never leave the server.
 
-const at = "2026-01-05T03:00:00.000Z";
-const verified = (message: string, businessName: string | null = null) => ({ ok: true, message, businessName, at });
+// Dates relative to now, so the list reads like a live setup ("Connected 2 h ago").
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+const at = hoursAgo(24 * 30);
+const verified = (message: string, businessName: string | null = null, h = 2) => ({ ok: true, message, businessName, at: hoursAgo(h) });
 
 export function sampleSettings(): Settings {
   return {
@@ -20,7 +22,7 @@ export function sampleSettings(): Settings {
       id: name,
       name,
       userToken: `sample-user-token-${name.replace(/\W/g, "").toLowerCase()}`,
-      verified: verified("Sample mode: no request was sent to PEAK.", `${name} (sample)`),
+      verified: verified("Sample mode: no request was sent to PEAK.", `${name} (sample)`, 1 + name.length),
       createdAt: at,
     })),
     netsuite: [

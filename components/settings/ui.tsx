@@ -156,7 +156,7 @@ export function TestResultAlert({ result }: { result: TestResponse }) {
           {result.subsidiaries.length > 8 ? ` and ${result.subsidiaries.length - 8} more` : ""}.
         </span>
       )}
-      {result.arEndpoint?.ok && <span className="mt-1 block text-green-800">✓ {result.arEndpoint.message}</span>}
+      {result.arEndpoint?.ok && <span className="mt-1 block text-green-800">{result.arEndpoint.message}</span>}
     </Alert>
   );
 }
@@ -227,17 +227,67 @@ export function Toggle({ checked, onChange, label, hint }: { checked: boolean; o
   );
 }
 
-export function Card({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
+/**
+ * A settings section's heading: a small gradient label naming its group, then a large gradient title.
+ * Used at the top of each section (Companies, PEAK API keys, Data sync).
+ */
+export function SectionHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description?: string; action?: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight text-slate-900">{title}</h2>
-          {description && <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-500">{description}</p>}
-        </div>
-        {action}
+    <div className="relative flex flex-wrap items-start justify-between gap-4 sm:flex-nowrap">
+      <div className="min-w-0">
+        <span className="inline-flex items-center rounded-full bg-gradient-to-r from-brand/10 via-aqua/10 to-transparent px-2.5 py-0.5 text-[11px] font-semibold tracking-wide text-brand ring-1 ring-brand/10 ring-inset">
+          {eyebrow}
+        </span>
+        <h2 className="mt-2 bg-gradient-to-r from-slate-900 via-brand-dark to-brand bg-clip-text pb-0.5 text-2xl font-semibold tracking-tight text-transparent">
+          {title}
+        </h2>
+        {description && <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-500">{description}</p>}
       </div>
-      {children}
+      {action && <div className="shrink-0 sm:pt-6">{action}</div>}
+    </div>
+  );
+}
+
+/** Soft colour glow in a section card's top-right corner (decoration only). */
+export function CardGlow() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-gradient-to-br from-brand/15 via-aqua/10 to-transparent blur-2xl" />
+  );
+}
+
+/** A settings card. With `eyebrow` it opens a section (decorated heading); without, it's a plain sub-card. */
+export function Card({
+  title,
+  eyebrow,
+  description,
+  action,
+  children,
+}: {
+  title: string;
+  eyebrow?: string;
+  description?: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm">
+      {eyebrow ? (
+        <>
+          <CardGlow />
+          <div className="mb-6">
+            <SectionHeading eyebrow={eyebrow} title={title} description={description} action={action} />
+          </div>
+        </>
+      ) : (
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-slate-900">{title}</h2>
+            {description && <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-500">{description}</p>}
+          </div>
+          {action}
+        </div>
+      )}
+      <div className="relative">{children}</div>
     </section>
   );
 }
@@ -327,7 +377,6 @@ export function NeedList({ items }: { items: { label: string; from: ReactNode }[
 export function DoneHeader({ title, sub }: { title: ReactNode; sub?: ReactNode }) {
   return (
     <div className="mb-5 text-center">
-      <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-full bg-green-50 text-xl text-green-600 ring-1 ring-green-600/15">✓</div>
       <h2 className="text-xl font-semibold tracking-tight text-slate-900">{title}</h2>
       {sub && <p className="mt-1 text-sm text-slate-500">{sub}</p>}
     </div>
@@ -341,5 +390,57 @@ export function Chip({ k, mono, children }: { k: string; mono?: boolean; childre
       <span className="text-slate-400">{k}</span>
       <span className={`text-slate-700 ${mono ? "font-mono" : ""}`}>{children}</span>
     </span>
+  );
+}
+
+// ---------- Icon buttons (row actions) ----------
+
+const ICONS = {
+  // Pulse line: "check the connection"
+  test: <polyline points="3 12 7.5 12 10 5 14 19 16.5 12 21 12" />,
+  // Pencil
+  edit: (
+    <>
+      <path d="M16.9 3.6a2.1 2.1 0 0 1 3 3L8 18.5l-4 1 1-4Z" />
+      <path d="m14.5 6 3.5 3.5" />
+    </>
+  ),
+  // Trash can
+  remove: (
+    <>
+      <path d="M4 7h16" />
+      <path d="M9.5 7V4.8c0-.4.4-.8.8-.8h3.4c.4 0 .8.4.8.8V7" />
+      <path d="M6.5 7l.8 12.2c.1.9.8 1.8 1.8 1.8h5.8c1 0 1.7-.9 1.8-1.8L17.5 7" />
+    </>
+  ),
+};
+
+/** A square icon-only button. `label` is the tooltip and the accessible name. */
+export function IconButton({
+  icon,
+  label,
+  loading,
+  tone = "default",
+  className = "",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { icon: keyof typeof ICONS; label: string; loading?: boolean; tone?: "default" | "danger" }) {
+  const toneCls = tone === "danger" ? "text-slate-400 hover:bg-red-50 hover:text-red-600" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900";
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      {...props}
+      disabled={props.disabled || loading}
+      className={`inline-flex size-8 items-center justify-center rounded-lg transition focus-visible:ring-4 focus-visible:ring-brand/15 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${toneCls} ${className}`}
+    >
+      {loading ? (
+        <span className="size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent" aria-hidden />
+      ) : (
+        <svg viewBox="0 0 24 24" className="size-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          {ICONS[icon]}
+        </svg>
+      )}
+    </button>
   );
 }

@@ -59,7 +59,8 @@ export const api = {
     call<{ host: string; found: boolean | null; code: string | null }>("GET", `/api/settings/netsuite/resolve?account=${encodeURIComponent(account)}`),
   deleteNetSuite: (id: string) => call<{ settings: PublicSettings }>("DELETE", `/api/settings/netsuite/${encodeURIComponent(id)}`),
   syncStatus: () => call<SyncStatusView>("GET", "/api/sync"),
-  saveSync: (b: { enabled: boolean; intervalMinutes: number; skipClosedUat: boolean }) => call<SyncConfigView>("PUT", "/api/settings/sync", b),
+  saveSync: (b: { enabled: boolean; intervalMinutes: number; skipClosedUat: boolean; peakPageSize: number; pageWaitSeconds: number }) =>
+    call<SyncConfigView>("PUT", "/api/settings/sync", b),
   syncNow: () => call<{ started: boolean }>("POST", "/api/sync"),
 };
 

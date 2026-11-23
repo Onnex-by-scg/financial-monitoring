@@ -192,7 +192,21 @@ interface DebugContextValue {
 
 export const DebugContext = createContext<DebugContextValue | null>(null);
 
-export function DebugButton({ spec, tone = "light" }: { spec: () => DebugSpec; tone?: "light" | "dark" }) {
+/**
+ * Debug buttons show in development (`pnpm dev` / `pnpm dev:sample`) and are hidden in production builds
+ * (`next build`, e.g. Netlify). Set NEXT_PUBLIC_SHOW_DEBUG=1 at build time to show them in production anyway.
+ * NODE_ENV and NEXT_PUBLIC_* are inlined at build time, so this is decided per build, not per request.
+ */
+export const SHOW_DEBUG = process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_SHOW_DEBUG === "1";
+
+type DebugButtonProps = { spec: () => DebugSpec; tone?: "light" | "dark" };
+
+export function DebugButton(props: DebugButtonProps) {
+  if (!SHOW_DEBUG) return null;
+  return <DebugButtonInner {...props} />;
+}
+
+function DebugButtonInner({ spec, tone = "light" }: DebugButtonProps) {
   const [open, setOpen] = useState(false);
   const ctx = useContext(DebugContext);
   if (!ctx) return null;

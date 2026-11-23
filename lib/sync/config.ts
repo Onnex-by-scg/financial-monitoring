@@ -1,17 +1,34 @@
 import "server-only";
 import { readSettings, type SyncSettings } from "../peak/settings-store";
 import { SAMPLE_MODE } from "../mode";
+import { PAGE_WAIT_MAX_SECONDS, PEAK_PAGE_SIZE_DEFAULT, PEAK_PAGE_SIZE_MAX, PEAK_PAGE_SIZE_MIN } from "../settings-types";
 
 // How often the scheduler pulls. Settings → Data sync (saved in the database) wins; otherwise the
 // SYNC_INTERVAL_MINUTES env var; otherwise 15 minutes. Sample mode (lib/mode.ts) or SYNC_SCHEDULE=0 turn it off entirely.
 
 export const MIN_INTERVAL_MINUTES = 5;
 export const MAX_INTERVAL_MINUTES = 24 * 60;
-export const DEFAULT_SYNC: SyncSettings = {
+export const DEFAULT_SYNC: Required<SyncSettings> = {
   enabled: true,
   intervalMinutes: clampInterval(Number(process.env.SYNC_INTERVAL_MINUTES) || 15),
   skipClosedUat: true,
+  peakPageSize: PEAK_PAGE_SIZE_DEFAULT,
+  pageWaitSeconds: 0,
 };
+
+export const clampPageSize = (n: number) => Math.min(PEAK_PAGE_SIZE_MAX, Math.max(PEAK_PAGE_SIZE_MIN, Math.round(n)));
+export const clampPageWait = (n: number) => Math.min(PAGE_WAIT_MAX_SECONDS, Math.max(0, Math.round(n)));
+
+/** How a pull pages through PEAK / NetSuite. Passed to the AR loaders (lib/sync/ar-sync.ts). */
+export interface FetchPacing {
+  peakPageSize: number;
+  pageWaitMs: number;
+}
+
+export async function getFetchPacing(): Promise<FetchPacing> {
+  const c = await getSyncConfig();
+  return { peakPageSize: c.peakPageSize, pageWaitMs: c.pageWaitSeconds * 1000 };
+}
 
 export function clampInterval(n: number): number {
   return Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.round(n)));
@@ -24,10 +41,17 @@ export function scheduleBlockedBy(): string | null {
   return null;
 }
 
-export async function getSyncConfig(): Promise<SyncSettings & { fromSettings: boolean }> {
+export async function getSyncConfig(): Promise<Required<SyncSettings> & { fromSettings: boolean }> {
   const { settings } = await readSettings();
   const s = settings.sync;
   return s
-    ? { enabled: s.enabled, intervalMinutes: clampInterval(s.intervalMinutes), skipClosedUat: s.skipClosedUat ?? true, fromSettings: true }
-    : { ...DEFAULT_SYNC, fromSettings: false };
+    ? {
+        enabled: s.enabled,
+        intervalMinutes: clampInterval(s.intervalMinutes),
+        skipClosedUat: s.skipClosedUat ?? true,
+        peakPageSize: clampPageSize(s.peakPageSize ?? PEAK_PAGE_SIZE_DEFAULT),
+        pageWaitSeconds: clampPageWait(s.pageWaitSeconds ?? 0),
+        fromSettings: true,
+      }
+    : { ...DEFAULT_SYNC, peakPageSize: PEAK_PAGE_SIZE_DEFAULT, pageWaitSeconds: 0, fromSettings: false };
 }

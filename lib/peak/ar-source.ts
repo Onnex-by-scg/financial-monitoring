@@ -1,5 +1,7 @@
 import "server-only";
 import { noProgress, type Reporter } from "../sync/progress";
+import type { FetchPacing } from "../sync/config";
+import { makePacer, type Pacer } from "../sync/pacing";
 import {
   bangkokToday,
   peakDate,
@@ -19,8 +21,9 @@ import { resolveCompanies } from "./settings-store";
 // Invoice status filter codes (PEAK docs): 3 = waiting for payment, 4 = overdue.
 // On UAT, status 3 already includes the overdue ones; 4 is queried too and de-duplicated, to be safe.
 const OUTSTANDING_STATUSES = [3, 4];
-const PAGE_SIZE = 100; // PEAK maximum
-const MAX_PAGES = 50;
+const DEFAULT_PAGE_SIZE = 100; // PEAK maximum; Settings → Data sync can lower it
+/** Safety cap on rows read per list, whatever the page size (was 50 pages × 100). */
+const MAX_ROWS = 5000;
 const DETAIL_CONCURRENCY = 8; // PEAK allows 20 GETs in flight per User Token
 const CACHE_MS = 5 * 60 * 1000;
 // PEAK has no project API. Projects are a classification group, found by its name.
@@ -32,7 +35,12 @@ type Json = Record<string, unknown>;
 const cache = new Map<string, { at: number; data: ArResponse }>();
 const inflight = new Map<string, Promise<ArResponse>>();
 
-export async function getArData(companyId: string | null, refresh = false, progress: Reporter = noProgress): Promise<ArResponse> {
+export async function getArData(
+  companyId: string | null,
+  refresh = false,
+  progress: Reporter = noProgress,
+  pacing: FetchPacing = { peakPageSize: DEFAULT_PAGE_SIZE, pageWaitMs: 0 },
+): Promise<ArResponse> {
   const companies = await resolveCompanies();
   const company = companies.find((c) => c.id === companyId) ?? companies[0];
   // Credentials are part of the key, so editing them in Settings bypasses stale cached data.
@@ -43,7 +51,7 @@ export async function getArData(companyId: string | null, refresh = false, progr
   const running = inflight.get(key);
   if (running) return running;
 
-  const promise = load(company, companies, progress)
+  const promise = load(company, companies, progress, pacing)
     .then((data) => {
       cache.set(key, { at: Date.now(), data });
       return data;
@@ -89,7 +97,8 @@ function tracker(company: Company, calls: ApiCall[], progress: Reporter): Get {
   };
 }
 
-async function load(company: Company, companies: Company[], progress: Reporter): Promise<ArResponse> {
+async function load(company: Company, companies: Company[], progress: Reporter, pacing: FetchPacing): Promise<ArResponse> {
+  const paging: Paging = { pageSize: pacing.peakPageSize, pacer: makePacer(pacing.pageWaitMs) };
   const warnings: string[] = [];
   const calls: ApiCall[] = [];
   const get = tracker(company, calls, progress);
@@ -109,11 +118,11 @@ async function load(company: Company, companies: Company[], progress: Reporter):
 
   const [business, contacts, listed, projectGroup] = await Promise.all([
     phase("business", () => businessName(get)).catch(() => null),
-    phase("customers", () => contactNames(get)).catch((e: Error) => {
+    phase("customers", () => contactNames(get, paging)).catch((e: Error) => {
       warnings.push(`Customer names unavailable: ${e.message}`);
       return new Map<string, string>();
     }),
-    phase("invoices", () => outstandingInvoices(get)),
+    phase("invoices", () => outstandingInvoices(get, paging)),
     phase("projects", () => findProjectGroup(get)).catch((e: Error): ProjectGroup => {
       warnings.push(`Projects unavailable: ${e.message}`);
       return { info: { groupName: null, items: [], note: `PEAK's Classification call failed: ${e.message}` }, number: null };
@@ -283,10 +292,10 @@ function rawFields(r: Json): Record<string, unknown> {
   return out;
 }
 
-async function outstandingInvoices(get: Get): Promise<Json[]> {
+async function outstandingInvoices(get: Get, paging: Paging): Promise<Json[]> {
   const byCode = new Map<string, Json>();
   for (const status of OUTSTANDING_STATUSES) {
-    await paginate(get, "invoices-list", "PeakInvoices", "invoices", `/api/v1/Invoices/list?status=${status}&includeRemainAmount=1`, (rows) => {
+    await paginate(get, paging, "invoices-list", "PeakInvoices", "invoices", `/api/v1/Invoices/list?status=${status}&includeRemainAmount=1`, (rows) => {
       for (const r of rows) {
         const code = String(pick(r, "code") ?? "");
         if (code && !byCode.has(code)) byCode.set(code, r);
@@ -296,9 +305,9 @@ async function outstandingInvoices(get: Get): Promise<Json[]> {
   return [...byCode.values()];
 }
 
-async function contactNames(get: Get): Promise<Map<string, string>> {
+async function contactNames(get: Get, paging: Paging): Promise<Map<string, string>> {
   const names = new Map<string, string>();
-  await paginate(get, "contacts", "PeakContacts", "contacts", "/api/v1/Contacts/list?", (rows) => {
+  await paginate(get, paging, "contacts", "PeakContacts", "contacts", "/api/v1/Contacts/list?", (rows) => {
     for (const c of rows) names.set(String(pick(c, "code") ?? ""), String(pick(c, "name") ?? ""));
   });
   return names;
@@ -309,10 +318,26 @@ async function businessName(get: Get): Promise<string | null> {
   return pick<string>(pick(pick(pick(json, "PeakUser"), "userMerchant"), "merchant"), "name") ?? null;
 }
 
-async function paginate(get: Get, purpose: CallPurpose, root: string, listKey: string, basePath: string, onPage: (rows: Json[]) => void) {
+/** Page size and spacing for PEAK list reads (Settings → Data sync). */
+interface Paging {
+  pageSize: number;
+  pacer: Pacer;
+}
+
+async function paginate(
+  get: Get,
+  paging: Paging,
+  purpose: CallPurpose,
+  root: string,
+  listKey: string,
+  basePath: string,
+  onPage: (rows: Json[]) => void,
+) {
   const sep = basePath.endsWith("?") ? "" : "&";
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const json = await get(purpose, `${basePath}${sep}limit=${PAGE_SIZE}&page=${page}`, root, listKey);
+  const { pageSize, pacer } = paging;
+  const maxPages = Math.ceil(MAX_ROWS / pageSize);
+  for (let page = 1; page <= maxPages; page++) {
+    const json = await pacer.run(() => get(purpose, `${basePath}${sep}limit=${pageSize}&page=${page}`, root, listKey));
     const body = pick(json, root);
     const resCode = pick<string>(body, "resCode");
     if (resCode !== "200") {
@@ -321,7 +346,7 @@ async function paginate(get: Get, purpose: CallPurpose, root: string, listKey: s
     }
     const rows = pick<Json[]>(body, listKey) ?? [];
     onPage(rows);
-    if (rows.length < PAGE_SIZE) return;
+    if (rows.length < pageSize) return;
   }
 }
 

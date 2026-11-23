@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import { NS_DEFAULT_SCRIPT, nsKind, type NsKind, type PublicNetSuite, type PublicSettings, type TestResponse } from "@/lib/settings-types";
+import { NS_DEFAULT_SCRIPT, type NsKind, type PublicNetSuite, type PublicSettings, type TestResponse } from "@/lib/settings-types";
 import { api, ApiError, type NetSuiteBody } from "./api";
 import { FormActions } from "./forms";
-import { Alert, Button, Card, Chip, DoneHeader, Field, Modal, NeedList, SecretInput, StatusPill, StepActions, StepTitle, TestResultAlert, TextInput, Wizard } from "./ui";
+import { Alert, Button, DoneHeader, Field, NeedList, SecretInput, StepActions, StepTitle, TestResultAlert, TextInput, Wizard } from "./ui";
 
 // NetSuite connections use OAuth 1.0 Token-Based Authentication (TBA) against SCG's integration RESTlet
 // (netsuite_api_docs/). Each connection = one NetSuite account + one integration record + one access token.
@@ -20,13 +20,6 @@ export function NsKindPill({ kind }: { kind: NsKind }) {
   );
 }
 
-function NetSuiteMark() {
-  return (
-    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[#1f3b57] text-[11px] font-black tracking-tight text-white" aria-hidden>
-      NS
-    </span>
-  );
-}
 
 const hostFor = (accountId: string) => `${(accountId || "<account>").toLowerCase().replace(/_/g, "-")}.restlets.api.netsuite.com`;
 
@@ -350,7 +343,7 @@ export function NetSuiteOnboarding({ onChange, onBack, onExit }: { onChange: (s:
   };
 
   return (
-    <Wizard title="Connect NetSuite" steps={STEPS} step={step} onClose={onExit}>
+    <Wizard title="Add a NetSuite company" steps={STEPS} step={step} onClose={onExit}>
       {step === 0 && (
         <>
           <StepTitle title="What you'll need" sub="A NetSuite administrator creates these." />
@@ -381,8 +374,8 @@ export function NetSuiteOnboarding({ onChange, onBack, onExit }: { onChange: (s:
         >
           <StepTitle title="Which account?" sub="Sandbox and Production have separate keys." />
           <div className="space-y-4">
-            <Field label="Connection name">
-              <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. SCG NetSuite Sandbox" maxLength={40} />
+            <Field label="Company name">
+              <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Nexter Living" maxLength={40} />
             </Field>
             <AccountFields v={acc} set={setA} />
           </div>
@@ -465,7 +458,7 @@ export function NetSuiteOnboarding({ onChange, onBack, onExit }: { onChange: (s:
 
 // ---------- Edit form (modal) ----------
 
-function NetSuiteEditForm({ connection, onSaved, onCancel }: { connection: PublicNetSuite; onSaved: (s: PublicSettings) => void; onCancel: () => void }) {
+export function NetSuiteEditForm({ connection, onSaved, onCancel }: { connection: PublicNetSuite; onSaved: (s: PublicSettings) => void; onCancel: () => void }) {
   const [name, setName] = useState(connection.name);
   const [acc, setAcc] = useState<AccountState>(() => initialAccount(connection));
   const [keys, setKeys] = useState<KeyState>(blankKeys);
@@ -487,7 +480,7 @@ function NetSuiteEditForm({ connection, onSaved, onCancel }: { connection: Publi
         void save(false);
       }}
     >
-      <Field label="Connection name">
+      <Field label="Company name">
         <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={40} />
       </Field>
       <AccountFields v={acc} set={setA} />
@@ -506,144 +499,5 @@ function NetSuiteEditForm({ connection, onSaved, onCancel }: { connection: Publi
         saveDisabled={!name.trim() || !accountId}
       />
     </form>
-  );
-}
-
-// ---------- Settings section ----------
-
-export function NetSuiteSection({ settings, onChange }: { settings: PublicSettings; onChange: (s: PublicSettings) => void }) {
-  const [wizard, setWizard] = useState(false);
-  const [editing, setEditing] = useState<PublicNetSuite | null>(null);
-
-  if (wizard) return <NetSuiteOnboarding onChange={onChange} onExit={() => setWizard(false)} />;
-
-  return (
-    <Card
-      title="NetSuite"
-      description="Each connection is a tab on the dashboard."
-      action={settings.netsuite.length > 0 && <Button onClick={() => setWizard(true)}>+ Connect NetSuite</Button>}
-    >
-      {settings.netsuite.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-300 px-6 py-10 text-center">
-          <div className="mx-auto mb-3 w-fit">
-            <NetSuiteMark />
-          </div>
-          <p className="text-sm font-medium text-slate-800">No NetSuite account connected</p>
-          <Button className="mt-4" onClick={() => setWizard(true)}>
-            Start NetSuite setup
-          </Button>
-        </div>
-      ) : (
-        <ul className="space-y-3">
-          {settings.netsuite.map((n) => (
-            <NetSuiteRow key={n.id} n={n} onEdit={() => setEditing(n)} onChange={onChange} />
-          ))}
-        </ul>
-      )}
-
-      {editing && (
-        <Modal title={`Edit ${editing.name}`} onClose={() => setEditing(null)}>
-          <NetSuiteEditForm
-            connection={editing}
-            onCancel={() => setEditing(null)}
-            onSaved={(s) => {
-              onChange(s);
-              setEditing(null);
-            }}
-          />
-        </Modal>
-      )}
-    </Card>
-  );
-}
-
-function NetSuiteRow({ n, onEdit, onChange }: { n: PublicNetSuite; onEdit: () => void; onChange: (s: PublicSettings) => void }) {
-  const [testing, setTesting] = useState(false);
-  const [result, setResult] = useState<TestResponse | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  return (
-    <li className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm">
-      <div className="flex flex-wrap items-center gap-4">
-        <NetSuiteMark />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold">{n.name}</span>
-            <NsKindPill kind={n.kind ?? nsKind(n.accountId)} />
-            <StatusPill v={n.verified} />
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs text-slate-500">
-            <Chip k="Account" mono>
-              {n.accountId}
-            </Chip>
-            <Chip k="Consumer Key" mono>
-              {n.consumerKeyMasked}
-            </Chip>
-            <Chip k="Token" mono>
-              {n.tokenIdMasked}
-            </Chip>
-            <Chip k="Script" mono>
-              {n.scriptId}/{n.deployId}
-            </Chip>
-          </div>
-        </div>
-        {confirmDelete ? (
-          <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-1.5 text-sm text-red-900">
-            Remove {n.name}?
-            <Button
-              variant="danger"
-              size="sm"
-              loading={deleting}
-              onClick={async () => {
-                setDeleting(true);
-                try {
-                  onChange((await api.deleteNetSuite(n.id)).settings);
-                } catch (e) {
-                  setError((e as Error).message);
-                  setDeleting(false);
-                }
-              }}
-            >
-              Remove
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              loading={testing}
-              onClick={async () => {
-                setTesting(true);
-                setResult(null);
-                setError(null);
-                try {
-                  setResult(await api.testNetSuite({ id: n.id }));
-                  onChange(await api.settings());
-                } catch (e) {
-                  setResult({ ok: false, message: (e as Error).message });
-                } finally {
-                  setTesting(false);
-                }
-              }}
-            >
-              Test
-            </Button>
-            <Button variant="secondary" size="sm" onClick={onEdit}>
-              Edit
-            </Button>
-            <Button variant="ghost" size="sm" className="text-red-700 hover:bg-red-50 hover:text-red-800" onClick={() => setConfirmDelete(true)}>
-              Remove
-            </Button>
-          </div>
-        )}
-      </div>
-      {(result || error) && <div className="mt-3">{result ? <TestResultAlert result={result} /> : <Alert kind="err">{error}</Alert>}</div>}
-    </li>
   );
 }

@@ -8,6 +8,7 @@ import { getArData as getPeakAr } from "../peak/ar-source";
 import { hash, PeakError, type Company } from "../peak/client";
 import { readSettings, resolveCompanies, type StoredNetSuite } from "../peak/settings-store";
 import { beginProgress, SAVE_STEP } from "./progress";
+import { getFetchPacing } from "./config";
 import { SAMPLE_MODE } from "../mode";
 import { sampleRuns } from "../sample-runs";
 
@@ -56,14 +57,15 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
   try {
     let data: ArResponse;
     let mode: string | null = null;
+    const pacing = await getFetchPacing(); // Settings → Data sync: PEAK page size, wait between pages
     if (target.provider === "peak") {
-      data = await getPeakAr(target.id, true, progress);
+      data = await getPeakAr(target.id, true, progress, pacing);
     } else {
       const stateKey = `ns:${target.id}`;
       const saved = await db.syncState.findUnique({ where: { key: stateKey } });
       const parsed = saved ? (JSON.parse(saved.value) as { credKey: string; state: NsSyncState }) : null;
       const prev = parsed?.credKey === target.credKey ? parsed.state : await legacyNsState(target.id, target.credKey);
-      const result = await loadNetSuiteAr(target.conn, entities, prev, progress);
+      const result = await loadNetSuiteAr(target.conn, entities, prev, progress, pacing.pageWaitMs);
       data = result.data;
       mode = result.data.debug.sync?.mode ?? null;
       await db.syncState.upsert({

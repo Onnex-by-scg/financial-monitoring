@@ -2,15 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import type { PublicCompany, PublicSettings, TestResponse } from "@/lib/settings-types";
+import type { PublicSettings, TestResponse } from "@/lib/settings-types";
 import { api } from "./api";
-import { CompanyForm, DeveloperForm } from "./forms";
-import { NetSuiteSection } from "./NetSuite";
+import { CompaniesSection } from "./Companies";
+import { DeveloperForm } from "./forms";
 import { Onboarding } from "./Onboarding";
 import { SyncSection } from "./SyncSection";
-import { Alert, Button, Card, Chip, EnvPill, Modal, StatusPill, TestResultAlert } from "./ui";
+import { Alert, Button, Card, EnvPill, StatusPill, TestResultAlert } from "./ui";
 
-type Section = "developer" | "companies" | "netsuite" | "sync";
+type Section = "companies" | "developer" | "sync";
 
 export default function SettingsApp() {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
@@ -31,20 +31,24 @@ export default function SettingsApp() {
 
   const nav: { group: string; items: { key: Section; label: string; badge: string }[] }[] = settings
     ? [
+        { group: "Dashboard", items: [{ key: "companies", label: "Companies", badge: `${settings.companies.length + settings.netsuite.length}` }] },
         {
-          group: "Data sources",
+          group: "Connections",
           items: [
-            { key: "companies", label: "PEAK companies", badge: `${settings.companies.length}` },
-            { key: "developer", label: "PEAK developer", badge: settings.developer ? "" : "!" },
-            { key: "netsuite", label: "NetSuite", badge: settings.netsuite.length ? `${settings.netsuite.length}` : "" },
+            // Only flag missing PEAK keys when a PEAK company relies on the shared ones.
+            { key: "developer", label: "PEAK API keys", badge: !settings.developer && settings.companies.some((c) => !c.ownDeveloper) ? "!" : "" },
+            { key: "sync", label: "Data sync", badge: "" },
           ],
         },
-        { group: "Dashboard", items: [{ key: "sync", label: "Data sync", badge: "" }] },
       ]
     : [];
 
   return (
-    <div className="min-h-screen bg-[#F3F6FA] text-ink">
+    <div className="relative min-h-screen overflow-x-clip bg-[#F3F6FA] text-ink">
+      <div aria-hidden className="pointer-events-none fixed inset-0 -z-0">
+        <div className="absolute -top-40 -left-32 size-[460px] rounded-full bg-brand/10 blur-3xl" />
+        <div className="absolute top-1/3 -left-40 size-[380px] rounded-full bg-aqua/10 blur-3xl" />
+      </div>
       <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-5 gap-y-2 px-6 py-3">
           <Link
@@ -67,7 +71,7 @@ export default function SettingsApp() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      <main className="relative mx-auto max-w-6xl px-6 py-8">
         {loadError && (
           <Alert kind="err" title="Couldn't load settings">
             {loadError}
@@ -83,42 +87,41 @@ export default function SettingsApp() {
 
         {settings && wizard === false && (
           <div className="grid gap-8 md:grid-cols-[200px_minmax(0,1fr)]">
-            <aside className="space-y-6 md:sticky md:top-24 md:self-start">
-              <nav className="space-y-6" aria-label="Settings sections">
+            {/* Glass sidebar: a translucent panel over the page's soft colour wash. On phones it becomes a scrollable row. */}
+            <aside className="md:sticky md:top-24 md:self-start">
+              <nav
+                aria-label="Settings sections"
+                className="flex gap-1 overflow-x-auto rounded-2xl border border-white/70 bg-white/40 p-1.5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_32px_-16px_rgba(15,23,42,0.18)] backdrop-blur-xl md:block md:space-y-1 md:p-2"
+              >
                 {nav.map((g) => (
-                  <div key={g.group}>
-                    <h2 className="mb-2 px-3 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">{g.group}</h2>
-                    <div className="space-y-1">
-                      {g.items.map((it) => {
-                        const on = section === it.key;
-                        return (
-                          <button
-                            key={it.key}
-                            type="button"
-                            aria-current={on ? "page" : undefined}
-                            onClick={() => setSection(it.key)}
-                            className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition ${
-                              on ? "bg-white shadow-sm" : "hover:bg-white/70"
-                            }`}
-                          >
-                            <span className={`min-w-0 flex-1 text-sm font-semibold ${on ? "text-slate-900" : "text-slate-600"}`}>{it.label}</span>
-                            {it.badge && (
-                              <span
-                                className={`rounded-full px-1.5 py-px text-[11px] font-semibold tabular-nums ${
-                                  it.badge === "!" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"
-                                }`}
-                              >
-                                {it.badge}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  <div key={g.group} className="contents md:block">
+                    <h2 className="hidden px-3 pt-3 pb-1.5 text-[11px] font-medium tracking-wide text-slate-400 first:pt-1.5 md:block">{g.group}</h2>
+                    {g.items.map((it) => {
+                      const on = section === it.key;
+                      return (
+                        <button
+                          key={it.key}
+                          type="button"
+                          aria-current={on ? "page" : undefined}
+                          onClick={() => setSection(it.key)}
+                          className={`relative flex shrink-0 items-center gap-3 rounded-xl px-3 py-2 text-left text-sm whitespace-nowrap transition md:w-full ${
+                            on
+                              ? "bg-white/85 font-semibold text-slate-900 shadow-sm ring-1 ring-slate-900/[0.04]"
+                              : "font-medium text-slate-500 hover:bg-white/50 hover:text-slate-800"
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1">{it.label}</span>
+                          {it.badge === "!" ? (
+                            <span className="size-2 rounded-full bg-amber-400" title="Needs setup" aria-label="Needs setup" />
+                          ) : (
+                            it.badge && <span className={`text-xs tabular-nums ${on ? "text-slate-500" : "text-slate-400"}`}>{it.badge}</span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 ))}
               </nav>
-              <p className="px-3 text-xs text-slate-400">Stored on this server only. Keys are masked here.</p>
             </aside>
 
             <div key={section} className="rise-in min-w-0 space-y-4">
@@ -128,7 +131,7 @@ export default function SettingsApp() {
                   sent to PEAK, NetSuite or the database.
                 </Alert>
               )}
-              {settings.source === "env" && section !== "netsuite" && section !== "sync" && (
+              {settings.source === "env" && section !== "sync" && (
                 <Alert kind="info" title="Using values from .env.local">
                   These credentials come from <code>.env.local</code>. Saving any change here stores them in {settings.storagePath}, which is used
                   from then on.
@@ -136,7 +139,6 @@ export default function SettingsApp() {
               )}
               {section === "developer" && <DeveloperSection settings={settings} onChange={setSettings} />}
               {section === "companies" && <CompaniesSection settings={settings} onChange={setSettings} />}
-              {section === "netsuite" && <NetSuiteSection settings={settings} onChange={setSettings} />}
               {section === "sync" && <SyncSection />}
             </div>
           </div>
@@ -154,8 +156,9 @@ function DeveloperSection({ settings, onChange }: { settings: PublicSettings; on
 
   return (
     <Card
-      title="Developer credentials"
-      description="Shared by every company that doesn't have its own."
+      eyebrow="Connections"
+      title="PEAK API keys"
+      description="Connect ID and Connect Key from PEAK, shared by every PEAK company that doesn't have its own. NetSuite companies use their own access keys."
       action={
         dev &&
         !editing && (
@@ -215,7 +218,7 @@ function DeveloperSection({ settings, onChange }: { settings: PublicSettings; on
             </dl>
             {result && <TestResultAlert result={result} />}
             <p className="text-xs text-slate-500">
-              Used by {settings.companies.filter((c) => !c.ownDeveloper).length} of {settings.companies.length} companies.
+              Used by {settings.companies.filter((c) => !c.ownDeveloper).length} of {settings.companies.length} PEAK companies.
             </p>
           </div>
         )
@@ -230,120 +233,5 @@ function Item({ label, children }: { label: string; children: React.ReactNode })
       <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
       <dd className="mt-1">{children}</dd>
     </div>
-  );
-}
-
-function CompaniesSection({ settings, onChange }: { settings: PublicSettings; onChange: (s: PublicSettings) => void }) {
-  const [modal, setModal] = useState<{ mode: "add" } | { mode: "edit"; company: PublicCompany } | null>(null);
-
-  return (
-    <Card
-      title="Companies"
-      description="Each company is a tab on the dashboard."
-      action={<Button onClick={() => setModal({ mode: "add" })}>+ Add company</Button>}
-    >
-      {settings.companies.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">No companies yet.</div>
-      ) : (
-        <ul className="space-y-3">
-          {settings.companies.map((c) => (
-            <CompanyRow key={c.id} company={c} onEdit={() => setModal({ mode: "edit", company: c })} onChange={onChange} />
-          ))}
-        </ul>
-      )}
-
-      {modal && (
-        <Modal title={modal.mode === "add" ? "Add company" : `Edit ${modal.company.name}`} onClose={() => setModal(null)}>
-          <CompanyForm
-            company={modal.mode === "edit" ? modal.company : undefined}
-            shared={settings.developer}
-            onCancel={() => setModal(null)}
-            onSaved={(s) => {
-              onChange(s);
-              setModal(null);
-            }}
-          />
-        </Modal>
-      )}
-    </Card>
-  );
-}
-
-function CompanyRow({ company: c, onEdit, onChange }: { company: PublicCompany; onEdit: () => void; onChange: (s: PublicSettings) => void }) {
-  const [testing, setTesting] = useState(false);
-  const [result, setResult] = useState<TestResponse | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const test = async () => {
-    setTesting(true);
-    setResult(null);
-    try {
-      setResult(await api.testCompany({ id: c.id }));
-      onChange(await api.settings()); // refresh the saved "last tested" status
-    } catch (e) {
-      setResult({ ok: false, message: (e as Error).message });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  return (
-    <li className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm">
-      <div className="flex flex-wrap items-center gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold">{c.name}</span>
-            <EnvPill env={c.env} />
-            <StatusPill v={c.verified} />
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs text-slate-500">
-            {c.verified?.businessName && <Chip k="PEAK business">{c.verified.businessName}</Chip>}
-            <Chip k="User Token" mono>
-              {c.userTokenMasked}
-            </Chip>
-            <Chip k="Developer">{c.ownDeveloper ? `own (${c.ownDeveloper.connectIdMasked})` : "shared"}</Chip>
-          </div>
-        </div>
-        {confirmDelete ? (
-          <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-1.5 text-sm text-red-900">
-            Remove {c.name}?
-            <Button
-              variant="danger"
-              size="sm"
-              loading={deleting}
-              onClick={async () => {
-                setDeleting(true);
-                try {
-                  onChange((await api.deleteCompany(c.id)).settings);
-                } catch (e) {
-                  setError((e as Error).message);
-                  setDeleting(false);
-                }
-              }}
-            >
-              Remove
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <Button variant="secondary" size="sm" loading={testing} onClick={test}>
-              Test
-            </Button>
-            <Button variant="secondary" size="sm" onClick={onEdit}>
-              Edit
-            </Button>
-            <Button variant="ghost" size="sm" className="text-red-700 hover:bg-red-50 hover:text-red-800" onClick={() => setConfirmDelete(true)}>
-              Remove
-            </Button>
-          </div>
-        )}
-      </div>
-      {(result || error) && <div className="mt-3">{result ? <TestResultAlert result={result} /> : <Alert kind="err">{error}</Alert>}</div>}
-    </li>
   );
 }

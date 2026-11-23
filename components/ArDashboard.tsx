@@ -18,9 +18,11 @@ import { explainLoadError } from "@/lib/load-error";
 import { BUCKET_STYLE, COLORS, fmtAmount, fmtCompact, fmtDate, fmtDateTime, fmtInt, fmtPct } from "@/lib/format";
 import { Donut, HBars, LegendItem, VBars } from "./charts";
 import { CustomerPicker, type CustomerOption } from "./CustomerPicker";
+import { ProjectPicker } from "./ProjectPicker";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { AppNav } from "./AppNav";
-import { progressPercent, SyncProgress, useSyncProgress, type SyncProgressView } from "./SyncProgress";
+import { CompanySwitcher } from "./CompanySwitcher";
+import { FirstPullCard, HeaderProgress, progressPercent, RefreshVeil, useSyncProgress, type SyncProgressView } from "./SyncProgress";
 import { DebugButton, DebugContext, fieldsFor, PROVIDER_LABEL, type DebugSpec } from "./DebugPanel";
 
 type ArGroup = "current" | "overdue";
@@ -316,8 +318,22 @@ export default function ArDashboard() {
   return (
     <div className="min-h-screen bg-[#F3F6FA] text-ink">
       {/* Top bar */}
-      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-6 gap-y-3 px-6 py-3">
+      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/90 backdrop-blur" style={{ viewTransitionName: "site-header" }}>
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-start gap-x-5 gap-y-3 px-6 py-3 md:flex-nowrap">
+          <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-x-5 gap-y-3 md:basis-0">
+          {entities.length > 0 && (
+            <>
+              <CompanySwitcher
+                items={entities}
+                value={activeEntity}
+                onChange={(id) => {
+                  setEntity(id);
+                  resetFilters();
+                }}
+              />
+              <span className="hidden h-8 w-px bg-slate-200 xl:block" aria-hidden />
+            </>
+          )}
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
               <span className="text-brand">AR</span> <span className="text-aqua">·</span> ESCO
@@ -338,36 +354,8 @@ export default function ArDashboard() {
             </p>
           </div>
 
-          <nav aria-label="Company" className={`flex flex-wrap gap-1 rounded-xl bg-slate-100 p-1 ${entities.length ? "" : "hidden"}`}>
-            {entities.map((e) => (
-              <button
-                key={e.id}
-                type="button"
-                onClick={() => {
-                  if (e.id === activeEntity) return;
-                  setEntity(e.id);
-                  resetFilters();
-                }}
-                aria-pressed={e.id === activeEntity}
-                className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${
-                  e.id === activeEntity ? "bg-brand text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"
-                }`}
-              >
-                {e.name}
-                {e.provider === "netsuite" && (
-                  <span
-                    className={`ml-1.5 rounded px-1 py-px align-middle text-[10px] font-bold ${e.id === activeEntity ? "bg-white/20 text-white" : "bg-slate-200 text-slate-600"}`}
-                    title="NetSuite"
-                  >
-                    NS
-                  </span>
-                )}
-              </button>
-            ))}
-          </nav>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <AppNav />
             <SourceBadge data={data} />
             <button
               type="button"
@@ -387,8 +375,14 @@ export default function ArDashboard() {
               Settings
             </Link>
           </div>
+          </div>
+          {/* The page switch has its own slot, outside the wrapping row above, so nothing on the page can move it:
+              top-right on wide screens, first row on phones. Same on every dashboard page (the active tab glides). */}
+          <div className="order-first w-full md:order-none md:mt-2 md:w-auto md:shrink-0">
+            <AppNav />
+          </div>
         </div>
-        <div className="ci-bar h-[3px]" aria-hidden />
+        <HeaderProgress active={Boolean(data?.refreshing || syncProgress)} progress={syncProgress} source={PROVIDER_LABEL[activeProvider]} />
       </header>
 
       <main className="mx-auto max-w-[1600px] px-6 py-5">
@@ -412,21 +406,6 @@ export default function ArDashboard() {
             onRetry={() => load({ refresh: true })}
           />
         )}
-        {data?.refreshing && (
-          <div role="status" className="slide-down mb-3 rounded-xl border border-brand/25 bg-brand-soft px-4 py-3 text-sm text-brand-dark">
-            <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-              <p className="max-w-md">
-                Showing the data saved <b>{fmtDateTime(data.fetchedAt)}</b>. Pulling the latest from {PROVIDER_LABEL[activeProvider]} in the background; the
-                page updates itself when it&apos;s done.
-              </p>
-              {syncProgress ? (
-                <SyncProgress progress={syncProgress} source={PROVIDER_LABEL[activeProvider]} compact />
-              ) : (
-                <span className="size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent" aria-hidden />
-              )}
-            </div>
-          </div>
-        )}
         {data?.warnings.map((w) => (
           <div key={w} className="slide-down mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
             ⚠ {w}
@@ -437,71 +416,21 @@ export default function ArDashboard() {
 
         {data && (
           <DebugContext.Provider value={{ data, filters: filterText }}>
+            <RefreshVeil active={Boolean(data.refreshing)} source={PROVIDER_LABEL[activeProvider]} progress={syncProgress} savedAt={fmtDateTime(data.fetchedAt)}>
             <div key={data.entity} className={`space-y-5 transition-opacity duration-300 ${loading ? "opacity-60" : ""}`}>
               {/* Filters: one row above everything they filter */}
               <section aria-label="Filters" className="rounded-2xl border border-slate-200/70 bg-white p-3 shadow-sm rise-in" style={{ "--d": "0ms" } as React.CSSProperties}>
+                {/* Row 1: who and what (pickers + search). Row 2: AR group and Aging on one line. */}
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="w-full sm:w-72">
                     <CustomerPicker options={customers} value={customer} onChange={setCustomer} />
                   </div>
 
                   {hasProjects && (
-                    <select
-                      value={project}
-                      onChange={(e) => setProject(e.target.value)}
-                      aria-label="Project"
-                      className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm shadow-sm sm:w-60"
-                    >
-                      <option value="all">All projects</option>
-                      {projectStats.map((p) => (
-                        <option key={p.code} value={p.code}>
-                          {p.code === NO_PROJECT ? "No project" : `${p.code} · ${p.name}`}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="w-full sm:w-72">
+                      <ProjectPicker options={projectStats} value={project} onChange={setProject} noProjectCode={NO_PROJECT} />
+                    </div>
                   )}
-
-                  <span className="text-[11px] font-semibold tracking-wide text-slate-400 uppercase">AR group</span>
-                  <div role="group" aria-label="AR group" className="-ml-1.5 flex gap-1 rounded-lg bg-slate-100 p-1">
-                    {(["current", "overdue"] as const).map((g) => {
-                      const on = arGroups.includes(g);
-                      return (
-                        <button
-                          key={g}
-                          type="button"
-                          aria-pressed={on}
-                          onClick={() => setArGroups(on ? arGroups.filter((x) => x !== g) : [...arGroups, g])}
-                          className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-semibold capitalize transition ${
-                            on ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
-                          }`}
-                        >
-                          <span className="inline-block size-2 rounded-full" style={{ background: g === "current" ? COLORS.current : COLORS.overdue }} />
-                          {g}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <span className="text-[11px] font-semibold tracking-wide text-slate-400 uppercase">Aging</span>
-                  <div role="group" aria-label="Aging bucket" className="-ml-1.5 flex flex-wrap gap-1.5">
-                    {BUCKETS.map((b) => {
-                      const on = bucket === b;
-                      return (
-                        <button
-                          key={b}
-                          type="button"
-                          aria-pressed={on}
-                          onClick={() => setBucket(on ? null : b)}
-                          className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                            on ? "border-ink bg-ink text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900"
-                          }`}
-                        >
-                          <span className="inline-block size-2 rounded-full" style={{ background: BUCKET_STYLE[b].color }} />
-                          {BUCKET_STYLE[b].label}
-                        </button>
-                      );
-                    })}
-                  </div>
 
                   <label className="relative min-w-[200px] flex-1">
                     <span className="sr-only">Search</span>
@@ -520,6 +449,56 @@ export default function ArDashboard() {
                       Clear filters
                     </button>
                   )}
+                </div>
+
+                <div className="mt-3 flex items-center gap-3 overflow-x-auto border-t border-slate-100 pt-3 whitespace-nowrap lg:gap-5">
+                  <div className="flex shrink-0 items-center gap-2.5">
+                    <span className="hidden text-[11px] font-semibold tracking-wide text-slate-400 uppercase lg:inline">AR group</span>
+                    <div role="group" aria-label="AR group" className="flex gap-1 rounded-lg bg-slate-100 p-1">
+                      {(["current", "overdue"] as const).map((g) => {
+                        const on = arGroups.includes(g);
+                        return (
+                          <button
+                            key={g}
+                            type="button"
+                            aria-pressed={on}
+                            onClick={() => setArGroups(on ? arGroups.filter((x) => x !== g) : [...arGroups, g])}
+                            className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-semibold capitalize transition lg:px-3 ${
+                              on ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className="inline-block size-2 rounded-full" style={{ background: g === "current" ? COLORS.current : COLORS.overdue }} />
+                            {g}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <span className="h-6 w-px shrink-0 bg-slate-200" aria-hidden />
+
+                  <div className="flex shrink-0 items-center gap-2.5">
+                    <span className="hidden text-[11px] font-semibold tracking-wide text-slate-400 uppercase lg:inline">Aging</span>
+                    <div role="group" aria-label="Aging bucket" className="flex gap-1 rounded-lg bg-slate-100 p-1">
+                      {BUCKETS.map((b) => {
+                        const on = bucket === b;
+                        return (
+                          <button
+                            key={b}
+                            type="button"
+                            aria-pressed={on}
+                            onClick={() => setBucket(on ? null : b)}
+                            className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-semibold transition lg:px-3 ${
+                              on ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className="inline-block size-2 rounded-full" style={{ background: BUCKET_STYLE[b].color }} />
+                            {BUCKET_STYLE[b].label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </section>
 
@@ -758,6 +737,7 @@ export default function ArDashboard() {
                 <DocumentTable rows={sorted} sort={sort} setSort={setSort} total={s.total} debug={debug.documents} />
               </div>
             </div>
+            </RefreshVeil>
           </DebugContext.Provider>
         )}
       </main>
@@ -1240,23 +1220,7 @@ function RefreshIcon({ spinning, light = false }: { spinning: boolean; light?: b
 function LoadingSkeleton({ provider, progress }: { provider: Provider; progress: SyncProgressView | null }) {
   return (
     <div className="space-y-5">
-      <div className="mx-auto w-full max-w-xl rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm">
-        <h2 className="text-base font-semibold text-slate-900">First pull from {PROVIDER_LABEL[provider]}</h2>
-        <p className="mt-1 text-sm text-slate-500">
-          This tab has no saved data yet, so it&apos;s being read now and saved to the database. Next time it opens instantly.
-          {provider === "netsuite" ? " NetSuite's first read downloads every invoice, so large accounts take a few minutes." : ""}
-        </p>
-        <div className="mt-4">
-          {progress ? (
-            <SyncProgress progress={progress} source={PROVIDER_LABEL[provider]} />
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <span className="size-4 animate-spin rounded-full border-2 border-brand border-r-transparent" aria-hidden />
-              Loading…
-            </div>
-          )}
-        </div>
-      </div>
+      <FirstPullCard source={PROVIDER_LABEL[provider]} progress={progress} />
       <div className="grid animate-pulse gap-4 opacity-60 xl:grid-cols-4" aria-hidden>
         {[0, 1, 2, 3].map((i) => (
           <div key={i} className="h-28 rounded-2xl bg-white" />
