@@ -1,12 +1,6 @@
 import { route } from "@/lib/peak/route-helpers";
-import { isSyncing } from "@/lib/sync/ar-sync";
-import { getSyncProgress } from "@/lib/sync/progress";
+import { progressFor } from "@/lib/sync/progress-view";
 
-// GET /api/ar/progress?entity=<id> -> the running pull's steps (what it's doing now), for the loading bar.
-// Reads in-memory state only; never calls PEAK / NetSuite.
-export const GET = route(async (req) => {
-  const entity = new URL(req.url).searchParams.get("entity") ?? "";
-  const p = getSyncProgress(entity);
-  if (!isSyncing(entity) || !p?.running) return { running: false };
-  return { ...p, seconds: Math.round((Date.now() - p.startedAt) / 1000) };
-});
+// GET /api/ar/progress?entity=<id> -> the running pull's steps (what it's doing now), for the loading bar, plus
+// when the tab's last pull finished (lib/sync/progress-view.ts). Never calls PEAK / NetSuite.
+export const GET = route(async (req) => progressFor(new URL(req.url).searchParams.get("entity") ?? "", "ar"));

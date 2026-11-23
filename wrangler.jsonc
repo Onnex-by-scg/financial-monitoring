@@ -1,0 +1,28 @@
+// Cloudflare Worker for the dashboard. Built with `pnpm opennextjs-cloudflare build`, deployed with
+// `pnpm opennextjs-cloudflare deploy` (Workers Builds runs both on each push); `pnpm cf:preview` runs it locally.
+// Secrets (DATABASE_URL, PEAK_* / NetSuite credentials) are set on the Worker in the Cloudflare dashboard
+// (Settings → Variables and Secrets) or with `wrangler secret put`, never here: this file is committed.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "financial-monitoring-dashboard",
+  "main": "worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  // Scheduled pulls (worker.ts → /api/sync/scheduled). The app pulls only when Settings → Data sync says a
+  // round is due, so this just sets how often it checks.
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  // Keep variables set in the dashboard when deploying.
+  "keep_vars": true,
+  "observability": {
+    "enabled": true
+  }
+  // Optional: Hyperdrive keeps database connections warm between requests (lib/db.ts uses it when present).
+  // Create one for the Supabase connection string, then add:
+  // "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive id>" }]
+}

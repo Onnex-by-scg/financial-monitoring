@@ -1,7 +1,5 @@
 import "server-only";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { db } from "../db";
 import { SAMPLE_MODE } from "../mode";
 import { sampleSettings } from "../sample-settings";
@@ -13,14 +11,12 @@ import { nsKind, type PublicCompany, type PublicDeveloper, type PublicNetSuite, 
 // Credentials and options saved from the Settings page. Kept on the server only, in the database
 // (AppSetting row "settings"; RLS keeps it away from Supabase's public API). Read in this order:
 //  1. the database, once anything has been saved;
-//  2. .peak/settings.json, where older installs saved them (read-only now; the next save moves them to the database);
-//  3. .env.local / host environment variables (PEAK_*).
+//  2. .env.local / host environment variables (PEAK_*).
 
 // In sample mode (lib/mode.ts) settings live in memory instead, seeded with sample companies.
 
 const SETTINGS_KEY = "settings";
 const mem = globalThis as { __sampleSettings?: Settings };
-const LEGACY_FILE = path.join(process.cwd(), ".peak", "settings.json");
 
 interface StoredVerification {
   ok: boolean;
@@ -71,7 +67,7 @@ export interface SyncSettings {
   pageWaitSeconds?: number;
 }
 
-type Source = "sample" | "db" | "file" | "env" | "none";
+type Source = "sample" | "db" | "env" | "none";
 
 function normalize(parsed: Partial<Settings>): Settings {
   return { version: 1, developer: parsed.developer ?? null, companies: parsed.companies ?? [], netsuite: parsed.netsuite ?? [], sync: parsed.sync };
@@ -86,12 +82,6 @@ export async function readSettings(): Promise<{ source: Source; settings: Settin
     } catch (e) {
       throw new PeakError(500, `Saved settings in the database are not valid JSON: ${(e as Error).message}`);
     }
-  }
-  try {
-    return { source: "file", settings: normalize(JSON.parse(await fs.readFile(LEGACY_FILE, "utf8")) as Partial<Settings>) };
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") throw new PeakError(500, `Could not read ${LEGACY_FILE}: ${(e as Error).message}`);
   }
   const fromEnv = settingsFromEnv();
   return { source: fromEnv.developer || fromEnv.companies.length ? "env" : "none", settings: fromEnv };

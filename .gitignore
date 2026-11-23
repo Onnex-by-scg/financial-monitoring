@@ -55,3 +55,8 @@ package-lock.json
 
 # Netlify CLI link state
 .netlify
+
+# Cloudflare Workers build (opennextjs-cloudflare) and local wrangler state; .dev.vars holds local secrets
+/.open-next/
+/.wrangler/
+.dev.vars*

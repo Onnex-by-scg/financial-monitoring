@@ -1,7 +1,5 @@
 import "server-only";
 import { after } from "next/server";
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { ArDebug, ArEntity, ArInvoice, ArResponse, ArSource, ProjectInfo } from "../ar";
 import { db } from "../db";
 import { loadNetSuiteAr, nsCredKey, type NsSyncState } from "../netsuite/ar-source";
@@ -65,7 +63,7 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
       const stateKey = `ns:${target.id}`;
       const saved = await db.syncState.findUnique({ where: { key: stateKey } });
       const parsed = saved ? (JSON.parse(saved.value) as { credKey: string; state: NsSyncState }) : null;
-      const prev = parsed?.credKey === target.credKey ? parsed.state : await legacyNsState(target.id, target.credKey);
+      const prev = parsed?.credKey === target.credKey ? parsed.state : null;
       const result = await loadNetSuiteAr(target.conn, entities, prev, progress, pacing.pageWaitMs);
       data = result.data;
       mode = result.data.debug.sync?.mode ?? null;
@@ -190,7 +188,6 @@ export async function deleteEntityData(entityId: string) {
     db.syncRun.deleteMany({ where: { entityId } }),
     db.syncState.deleteMany({ where: { key: `ns:${entityId}` } }),
   ]);
-  await fs.rm(legacyFile(entityId), { force: true }).catch(() => undefined);
 }
 
 /** Recent pulls, newest first (for the sync status API). */
@@ -199,15 +196,3 @@ export async function recentRuns(limit = 50) {
   return db.syncRun.findMany({ orderBy: { startedAt: "desc" }, take: limit });
 }
 
-// ---- One-off: reuse the update state from the old disk cache (.peak/cache/netsuite-<id>.json), so the first
-// pull after switching to the database is an update instead of a full read. ----
-const legacyFile = (id: string) => path.join(process.cwd(), ".peak", "cache", `netsuite-${id.replace(/[^a-zA-Z0-9_-]/g, "")}.json`);
-
-async function legacyNsState(id: string, credKey: string): Promise<NsSyncState | null> {
-  try {
-    const c = JSON.parse(await fs.readFile(legacyFile(id), "utf8")) as { key?: string; sync?: NsSyncState };
-    return c.key === credKey && c.sync ? c.sync : null;
-  } catch {
-    return null;
-  }
-}

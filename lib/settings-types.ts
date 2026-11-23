@@ -31,7 +31,7 @@ export interface PublicCompany {
 export interface PublicSettings {
   /** sample = sample mode (in memory, lib/mode.ts), db = saved from Settings, file = old .peak/settings.json (moved to the database on the next save),
    *  env = still read from .env.local / host environment, none = nothing set up */
-  source: "sample" | "db" | "file" | "env" | "none";
+  source: "sample" | "db" | "env" | "none";
   storagePath: string;
   developer: PublicDeveloper | null;
   companies: PublicCompany[];

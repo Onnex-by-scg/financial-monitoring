@@ -81,6 +81,7 @@ export default function FinancialDashboard() {
       if (refreshing) void load();
     },
     "/api/pnl/progress",
+    refreshing ? (data?.lastSync?.at ?? null) : undefined,
   );
   const view = useMemo(() => (data ? buildView(data) : null), [data]);
   const cy = data?.currentYear;

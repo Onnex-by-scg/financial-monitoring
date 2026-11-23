@@ -1,10 +1,9 @@
 import "server-only";
 import { after } from "next/server";
-import fs from "node:fs/promises";
 import { bangkokToday } from "../ar";
 import { db } from "../db";
 import { BASE_URLS, PeakError } from "../peak/client";
-import { legacyPnlFile, readLegacyPnl, readTrialBalanceMonth } from "../peak/pnl-source";
+import { readTrialBalanceMonth } from "../peak/pnl-source";
 import { monthsFor, type PnlAccount, type PnlLine, type PnlMonth, type PnlResponse } from "../pnl";
 import { listTargets, type SyncTrigger, type Target } from "./ar-sync";
 import { beginProgress, SAVE_STEP } from "./progress";
@@ -36,28 +35,12 @@ const thisAndLastMonth = (today = bangkokToday()) => {
   return [`${y}${String(m).padStart(2, "0")}`, prev];
 };
 
-/** Months saved for a company (yyyyMM → when read). Drops months read with other credentials; imports the old file cache once. */
+/** Months saved for a company (yyyyMM → when read). Drops months read with other credentials. */
 async function storedMonths(target: PeakTarget): Promise<Map<string, number>> {
   let rows = await db.pnlMonth.findMany({ where: { entityId: target.id }, select: { month: true, credKey: true, fetchedAt: true } });
   if (rows.some((r) => r.credKey !== target.credKey)) {
     await db.pnlMonth.deleteMany({ where: { entityId: target.id, credKey: { not: target.credKey } } });
     rows = rows.filter((r) => r.credKey === target.credKey);
-  }
-  if (!rows.length) {
-    const legacy = Object.entries(await readLegacyPnl(target.id, target.credKey));
-    if (legacy.length) {
-      await db.pnlMonth.createMany({
-        data: legacy.map(([ym, m]) => ({
-          entityId: target.id,
-          month: ym,
-          credKey: target.credKey,
-          totals: JSON.stringify(m.data.totals),
-          accounts: JSON.stringify(m.data.accounts),
-          fetchedAt: new Date(m.at),
-        })),
-      });
-      rows = legacy.map(([ym, m]) => ({ month: ym, credKey: target.credKey, fetchedAt: new Date(m.at) }));
-    }
   }
   return new Map(rows.map((r) => [r.month, r.fetchedAt.getTime()]));
 }
@@ -192,5 +175,4 @@ export async function readPnl(entityId: string | null, year: number, opts: { ref
 export async function deletePnlData(entityId: string) {
   if (SAMPLE_MODE) return;
   await db.pnlMonth.deleteMany({ where: { entityId } });
-  await fs.rm(legacyPnlFile(entityId), { force: true }).catch(() => undefined);
 }

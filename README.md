@@ -25,7 +25,7 @@ Later, **Settings → Companies** lets you add, test, edit or remove companies, 
 
 - **Shared developer credentials:** one Connect ID / Connect Key pair for the application, used by every company by default.
 - **Per company:** its own **User Token**, plus optional **own developer credentials**, for a company with a separate PEAK API agreement or environment.
-- **Where:** saved on the server in the database (`AppSetting` row `settings`, with Row Level Security on so Supabase's public API can't read it). Older installs kept them in `.peak/settings.json`; that file is still read until the first save, which moves them to the database. Storing them in the database is what lets Settings work on Netlify, whose disk is read-only. The browser only ever receives masked values (`1eeb••••9f7b`). Secrets PEAK echoes back in error messages are redacted.
+- **Where:** saved on the server in the database (`AppSetting` row `settings`, with Row Level Security on so Supabase's public API can't read it). Storing them in the database is what lets Settings work on Cloudflare Workers and Netlify, which have no writable disk. The browser only ever receives masked values (`1eeb••••9f7b`). Secrets PEAK echoes back in error messages are redacted.
 - **Saving:** runs a connection test first. If the test fails, the form offers **Save anyway**, for example when UAT is closed.
 - **Before the first save:** the values in `.env.local` (`PEAK_ENV`, `PEAK_CONNECT_ID`, `PEAK_CONNECT_KEY`, `PEAK_USER_TOKEN`, `PEAK_ENTITY_NAME`, `PEAK_ENTITIES`) are used. After that, the saved settings in the database take over.
 - **Access:** the app has no login, so `npm run dev` / `npm start` bind to `127.0.0.1`, and the settings API refuses cross-site requests. Add authentication before hosting it anywhere shared.
@@ -78,7 +78,7 @@ The dashboard never calls PEAK or NetSuite itself. A sync service pulls the data
 
 ```
 PEAK / NetSuite ──(sync service: lib/sync/ar-sync.ts)──> Postgres (Supabase) ──(/api/ar)──> dashboard
-                  ▲ every 15 min (lib/sync/scheduler.ts)
+                  ▲ every 15 min (lib/sync/scheduler.ts; on Cloudflare a Cron Trigger)
                   ▲ ↻ Refresh on the dashboard
                   ▲ first visit to a tab with no data yet
                   ▲ POST /api/sync
@@ -94,6 +94,20 @@ PEAK / NetSuite ──(sync service: lib/sync/ar-sync.ts)──> Postgres (Supab
 - **Progress, step by step** (`lib/sync/progress.ts`, `components/SyncProgress.tsx`): every pull reports its steps, which the first-load screen and the Refresh banner show with a bar, the current activity and counts. PEAK: connecting → customer names → outstanding invoices → project groups → amounts due (only if the list left them out) → each invoice's project → saving. NetSuite full read: every page (n of N) → saving; update: newest pages → re-checking last time's open invoices (n of N) → saving. Skipped steps say why; a switch from update to full read is explained above the steps. `/api/ar/progress` serves it from memory.
 - **API:** `GET /api/sync` shows each tab (running?) and the last 50 pulls; `POST /api/sync[?entity=<id>]` starts a pull now (`npm run sync` does this for all tabs). Same-origin only; the server binds to 127.0.0.1.
 - **Financial Performance** is stored the same way: see that page's section below. Settings → Data sync lists its pulls as "P&L".
+
+## Deploy to Cloudflare Workers
+
+Built with [OpenNext for Cloudflare](https://opennext.js.org/cloudflare) (`@opennextjs/cloudflare`). Config: `wrangler.jsonc` (Worker, cron), `open-next.config.ts`, and `worker.ts` (the Worker entry: the Next.js app plus the cron handler).
+
+- **Workers Builds settings** (Cloudflare dashboard → the Worker → Settings → Build): build command `pnpm opennextjs-cloudflare build`, deploy command `pnpm opennextjs-cloudflare deploy`. pnpm's version comes from `packageManager` in `package.json`.
+- **Secrets** (Worker → Settings → Variables and Secrets, as *Secret*): `DATABASE_URL`, and any `PEAK_*` variables you use. Use Supabase's **transaction pooler** string (port 6543): each request opens its own connection. Optional: put a Hyperdrive binding named `HYPERDRIVE` in front of Supabase (see `wrangler.jsonc`) and `lib/db.ts` uses it.
+- **Plan:** Workers Paid. The free plan allows 10 ms of CPU per request and a 3 MB Worker; this one is about 4 MB compressed.
+- **Access:** the app has no login, and a Worker is public on its `*.workers.dev` address. Put it behind **Cloudflare Access** (Zero Trust → Access → Applications, for the Worker's hostname) before adding real credentials.
+- **Scheduled pulls:** a Cron Trigger runs every 15 minutes and calls `POST /api/sync/scheduled` inside the Worker; it pulls only when Settings → Data sync says a round is due. A cron run may last up to 15 minutes, so a full NetSuite read can finish there.
+- **↻ Refresh** runs after the response, and Workers stop that about 30 seconds later, so a long pull (a full NetSuite read) started by Refresh is cut short; the page stops waiting and keeps the saved data. The next scheduled round finishes it.
+- **Migrations** aren't run by the deploy: run `pnpm prisma migrate deploy` from your machine (with `DATABASE_URL` in `.env.local`) when `prisma/migrations` changes.
+- **Locally:** `pnpm cf:preview` builds and runs the Worker on `http://localhost:8787`. Don't run `pnpm cf:deploy` from your machine: the build bundles the values in `.env.local` into the Worker's code. Deploy from Workers Builds, where there's no `.env.local`.
+- **Prisma** is generated for Workers (`runtime = "cloudflare"` in `prisma/schema.prisma`); the same client also runs under Node (`pnpm dev`). `scripts/trim-server-traces.mjs` (run by `pnpm build`) keeps unused Prisma engines and build tools out of the Worker.
 
 ## What it shows
 

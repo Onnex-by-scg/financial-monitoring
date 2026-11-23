@@ -1,7 +1,10 @@
 # Packages allowed to run install scripts (pnpm blocks them by default).
 #  - prisma, @prisma/engines: set up the Prisma CLI's engines
 #  - better-sqlite3: a dependency of the Prisma CLI itself (the app's database is Postgres)
+#  - esbuild, workerd: used by the Cloudflare build (@opennextjs/cloudflare, wrangler)
 allowBuilds:
   '@prisma/engines': true
   better-sqlite3: true
   prisma: true
+  esbuild: true
+  workerd: true

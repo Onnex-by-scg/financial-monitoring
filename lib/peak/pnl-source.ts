@@ -1,6 +1,4 @@
 import "server-only";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { round2 } from "../ar";
 import { classifyAccount, emptyTotals, type PnlAccount, type PnlMonth } from "../pnl";
 import { peakGet, PeakError, pick, type Company } from "./client";
@@ -38,19 +36,6 @@ export async function readTrialBalanceMonth(company: Company, ym: string): Promi
   const p = `/api/v1/FinancialReports/trialbalance?fromMonth=${ym}&toMonth=${ym}`;
   const json = await throttled(company.userToken, () => peakGet(company.conn, company.userToken, p));
   return toMonth(ym, json);
-}
-
-// ---- One-off: the months saved by the old file cache (.peak/cache/peak-pnl-<company>.json), so the first page
-// load after switching to the database doesn't read PEAK again. ----
-export const legacyPnlFile = (id: string) => path.join(process.cwd(), ".peak", "cache", `peak-pnl-${id.replace(/[^a-zA-Z0-9_-]/g, "")}.json`);
-
-export async function readLegacyPnl(id: string, credKey: string): Promise<Record<string, { at: number; data: PnlMonth }>> {
-  try {
-    const c = JSON.parse(await fs.readFile(legacyPnlFile(id), "utf8")) as { key?: string; months?: Record<string, { at: number; data: PnlMonth }> };
-    return c.key === credKey && c.months ? c.months : {};
-  } catch {
-    return {};
-  }
 }
 
 /** PeakTrialBalance.trialBalanceAccount[] → this month's P&L lines. */

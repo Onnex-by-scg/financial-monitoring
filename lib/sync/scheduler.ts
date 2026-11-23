@@ -4,8 +4,12 @@ import { listTargets, syncEntity, type Target } from "./ar-sync";
 import { syncPnl } from "./pnl-sync";
 import { syncAll } from "./round";
 import { getSyncConfig, scheduleBlockedBy } from "./config";
+import { ON_WORKERS } from "../runtime";
 
-// Scheduled pulls into the database. Started once per server by instrumentation.ts.
+// Scheduled pulls into the database.
+// Node server: started once per server by instrumentation.ts, and runs on a timer in the process.
+// Cloudflare Workers: nothing runs between requests, so a Cron Trigger (worker.ts, wrangler.jsonc) calls
+// POST /api/sync/scheduled every 15 minutes, which runs runScheduledRound() below.
 //  - The interval and on/off come from Settings → Data sync (lib/sync/config.ts); a heartbeat re-reads them every
 //    30 seconds, so a change applies without a restart.
 //  - Each round pulls every tab, one at a time.
@@ -26,7 +30,7 @@ interface SchedulerState {
 const g = globalThis as { __syncScheduler?: SchedulerState };
 
 export function startScheduler() {
-  if (scheduleBlockedBy() || g.__syncScheduler) return; // dev reloads re-run register()
+  if (ON_WORKERS || scheduleBlockedBy() || g.__syncScheduler) return; // dev reloads re-run register()
   const state: SchedulerState = { lastRoundAt: Date.now(), roundRunning: false };
   g.__syncScheduler = state;
   setTimeout(() => void catchUp(), FIRST_DELAY_MS).unref();
@@ -37,10 +41,40 @@ export function startScheduler() {
 
 /** When the next scheduled round is due, or null when scheduling is off. */
 export async function nextRoundAt(): Promise<number | null> {
-  const s = g.__syncScheduler;
   const cfg = await getSyncConfig();
-  if (!s || !cfg.enabled) return null;
-  return s.lastRoundAt + cfg.intervalMinutes * 60_000;
+  if (!cfg.enabled || scheduleBlockedBy()) return null;
+  if (ON_WORKERS) {
+    // Due one interval after the last scheduled round; the cron checks every 15 minutes.
+    const last = await lastScheduledRoundAt();
+    return last === null ? Date.now() : last + cfg.intervalMinutes * 60_000;
+  }
+  const s = g.__syncScheduler;
+  return s ? s.lastRoundAt + cfg.intervalMinutes * 60_000 : null;
+}
+
+/** When the last scheduled round started (from the pull history), or null if there's never been one. */
+async function lastScheduledRoundAt(): Promise<number | null> {
+  const last = await db.syncRun.findFirst({ where: { trigger: "schedule" }, orderBy: { id: "desc" }, select: { startedAt: true } });
+  return last ? last.startedAt.getTime() : null;
+}
+
+// The cron fires every 15 minutes, a little after the round is due at most; this much early still counts as due,
+// so a 60-minute interval doesn't slip to 75.
+const CRON_SLACK_MS = 2 * 60_000;
+
+/**
+ * Cloudflare Workers: one scheduled round, if one is due (Settings → Data sync: on, and the interval has passed
+ * since the last one). Runs to the end before returning: a Cron Trigger may run for up to 15 minutes.
+ */
+export async function runScheduledRound(): Promise<{ ran: boolean; reason?: string }> {
+  const blocked = scheduleBlockedBy();
+  if (blocked) return { ran: false, reason: blocked };
+  const cfg = await getSyncConfig();
+  if (!cfg.enabled) return { ran: false, reason: "Scheduled pulls are off in Settings → Data sync." };
+  const last = await lastScheduledRoundAt();
+  if (last !== null && Date.now() - last < cfg.intervalMinutes * 60_000 - CRON_SLACK_MS) return { ran: false, reason: "Not due yet." };
+  await syncAll("schedule", { skip: (t) => skipReason(t, cfg.skipClosedUat), pnlRecentMinAgeMs: cfg.intervalMinutes * 60_000 });
+  return { ran: true };
 }
 
 /** After Settings change: count the next round from now (so a shorter interval doesn't fire a burst). */

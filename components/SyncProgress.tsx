@@ -30,6 +30,7 @@ function count(s: SyncStep): string {
 
 /** "Reading outstanding invoices · 2 pages" (several steps can run at once). */
 export function currentActivity(p: SyncProgressView): string {
+  if (!p.steps.length) return "Working…"; // running on another server instance: no step details
   const active = p.steps.filter((s) => s.status === "active");
   if (!active.length) return p.steps.every((s) => s.status !== "pending") ? "Finishing…" : "Starting…";
   return active.map((s) => [s.label, count(s)].filter(Boolean).join(" · ")).join("  ·  ");
@@ -84,29 +85,31 @@ export function HeaderProgress({ active, progress, source }: { active: boolean; 
   return <ProgressBar value={progress ? progressPercent(progress) : null} label={`Pulling from ${source}`} size="xs" className="rounded-none bg-slate-100" />;
 }
 
-/** Shown above the data while a pull refreshes it in the background: one line, a bar, and the saved time. */
+/**
+ * A one-line strip shown above the data while a pull refreshes it: spinner, what it's doing, a bar, the percentage,
+ * and when the data on screen was saved. Sits in the page flow, so it never covers the dashboard.
+ */
 export function RefreshBanner({ source, progress, savedAt }: { source: string; progress: SyncProgressView | null; savedAt: string }) {
   const pct = progress ? progressPercent(progress) : null;
   return (
-    <div role="status" className="rise-in rounded-2xl border border-slate-200/70 bg-white/95 px-5 py-4 shadow-xl shadow-slate-900/10 backdrop-blur">
-      <div className="flex items-center gap-3">
-        <span className="size-4 shrink-0 animate-spin rounded-full border-2 border-brand/20 border-t-brand" aria-hidden />
-        <p className="min-w-0 flex-1 truncate text-sm">
-          <span className="font-semibold text-slate-900">Updating from {source}</span>
-          <span className="text-slate-500"> · {progress ? currentActivity(progress) : "starting…"}</span>
-        </p>
-        {pct !== null && <span className="text-sm font-semibold text-slate-700 tabular-nums">{pct}%</span>}
+    <div role="status" className="slide-down flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-brand/15 bg-white/90 px-4 py-2.5 shadow-sm backdrop-blur">
+      <span className="size-4 shrink-0 animate-spin rounded-full border-2 border-brand/20 border-t-brand" aria-hidden />
+      <p className="min-w-0 flex-1 truncate text-sm">
+        <span className="font-semibold text-slate-900">Updating from {source}</span>
+        <span className="text-slate-500"> · {progress ? currentActivity(progress) : "starting…"}</span>
+      </p>
+      <div className="flex w-full items-center gap-3 sm:w-64">
+        <ProgressBar value={pct} label={`Updating from ${source}`} size="sm" className="flex-1" />
+        <span className="w-9 text-right text-sm font-semibold text-slate-700 tabular-nums">{pct !== null ? `${pct}%` : ""}</span>
       </div>
-      <ProgressBar value={pct} label={`Updating from ${source}`} size="sm" className="mt-2.5" />
-      <p className="mt-1.5 text-[11px] text-slate-400">Showing data saved {savedAt}</p>
+      <span className="hidden text-xs text-slate-400 lg:inline">Showing data saved {savedAt}</span>
     </div>
   );
 }
 
 /**
- * Wraps a dashboard's content. While a pull refreshes it, the saved data is dimmed, blurred and locked
- * (not clickable, skipped by keyboard and screen readers), and the progress card floats on top, staying in
- * view while scrolling. When the pull ends, the fresh data fades back in.
+ * Wraps a dashboard's content. While a pull refreshes it, a progress strip sits above the data (never on top of it);
+ * the saved data stays fully visible and usable until the fresh data replaces it.
  */
 export function RefreshVeil({
   active,
@@ -122,20 +125,13 @@ export function RefreshVeil({
   children: React.ReactNode;
 }) {
   return (
-    <div className="relative" aria-busy={active || undefined}>
-      <div
-        inert={active || undefined}
-        className={`transition-[opacity,filter] duration-500 ${active ? "pointer-events-none opacity-35 blur-[3px] select-none" : ""}`}
-      >
-        {children}
-      </div>
+    <div aria-busy={active || undefined}>
       {active && (
-        <div className="absolute inset-0 z-20 flex justify-center">
-          <div className="sticky top-28 h-fit w-full max-w-lg px-4 pt-16">
-            <RefreshBanner source={source} progress={progress} savedAt={savedAt} />
-          </div>
+        <div className="mb-4">
+          <RefreshBanner source={source} progress={progress} savedAt={savedAt} />
         </div>
       )}
+      {children}
     </div>
   );
 }
@@ -247,8 +243,21 @@ function StepIcon({ status }: { status: SyncStep["status"] }) {
   return <span className="mt-0.5 size-4 shrink-0 rounded-full border-2 border-slate-200" aria-label="waiting" />;
 }
 
-/** While `active`, polls the progress endpoint every second for a tab; calls onDone when a running pull ends. */
-export function useSyncProgress(entity: string | null, active: boolean, onDone: () => void, endpoint = "/api/ar/progress"): SyncProgressView | null {
+/** If a refresh never shows up as running or finished (e.g. the server stopped it unrecorded), stop waiting after this. */
+const GIVE_UP_MS = 60_000;
+
+/**
+ * While `active`, polls the progress endpoint every second for a tab; calls onDone when a pull ends.
+ * `since` (the tab's last pull time when a refresh started) lets it see a pull end even if it never caught it
+ * running, which happens on Netlify: the pull runs on one server instance and the check may land on another.
+ */
+export function useSyncProgress(
+  entity: string | null,
+  active: boolean,
+  onDone: () => void,
+  endpoint = "/api/ar/progress",
+  since?: string | null,
+): SyncProgressView | null {
   const [progress, setProgress] = useState<SyncProgressView | null>(null);
   const onDoneRef = useRef(onDone);
   useEffect(() => {
@@ -258,14 +267,22 @@ export function useSyncProgress(entity: string | null, active: boolean, onDone: 
     if (!entity || !active) return;
     let wasRunning = false;
     let stopped = false;
+    let idleSince = Date.now();
     const tick = async () => {
       try {
-        const p = (await (await fetch(`${endpoint}?entity=${encodeURIComponent(entity)}`, { cache: "no-store" })).json()) as SyncProgressView | { running: false };
+        const p = (await (await fetch(`${endpoint}?entity=${encodeURIComponent(entity)}`, { cache: "no-store" })).json()) as (
+          | SyncProgressView
+          | { running: false }
+        ) & { lastFinishedAt?: string | null };
         if (stopped) return;
         setProgress(p.running ? (p as SyncProgressView) : null);
-        if (p.running) wasRunning = true;
-        else if (wasRunning) {
+        const finishedSince = since !== undefined && Boolean(p.lastFinishedAt) && (p.lastFinishedAt as string) > (since ?? "");
+        if (p.running) {
+          wasRunning = true;
+          idleSince = Date.now();
+        } else if (wasRunning || finishedSince || (since !== undefined && Date.now() - idleSince > GIVE_UP_MS)) {
           wasRunning = false;
+          idleSince = Date.now();
           onDoneRef.current();
         }
       } catch {
@@ -279,6 +296,6 @@ export function useSyncProgress(entity: string | null, active: boolean, onDone: 
       clearInterval(id);
       setProgress(null);
     };
-  }, [entity, active, endpoint]);
+  }, [entity, active, endpoint, since]);
   return progress;
 }

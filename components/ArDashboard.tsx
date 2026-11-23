@@ -310,10 +310,16 @@ export default function ArDashboard() {
   const entities = tabs ?? data?.entities ?? [];
   const activeEntity = entity ?? data?.entity ?? entities[0]?.id ?? null;
   const activeProvider: Provider = entities.find((e) => e.id === activeEntity)?.provider ?? provider;
-  const syncProgress = useSyncProgress(activeEntity, loading || Boolean(data?.refreshing), () => {
-    // A background pull finished: reload this tab from the database (no new pull).
-    if (data?.refreshing) void load();
-  });
+  const syncProgress = useSyncProgress(
+    activeEntity,
+    loading || Boolean(data?.refreshing),
+    () => {
+      // A background pull finished: reload this tab from the database (no new pull).
+      if (data?.refreshing) void load();
+    },
+    "/api/ar/progress",
+    data?.refreshing ? (data.lastSync?.at ?? null) : undefined,
+  );
 
   return (
     <div className="min-h-screen bg-[#F3F6FA] text-ink">

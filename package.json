@@ -7,16 +7,19 @@
     "dev": "next dev -H 127.0.0.1",
     "dev:sample": "PEAK_USE_SAMPLE=1 next dev -H 127.0.0.1",
     "prebuild": "prisma generate",
-    "build": "next build",
+    "build": "next build && node scripts/trim-server-traces.mjs",
     "prestart": "prisma migrate deploy",
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
-    "sync": "curl -s -X POST http://127.0.0.1:3000/api/sync"
+    "sync": "curl -s -X POST http://127.0.0.1:3000/api/sync",
+    "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy"
   },
   "dependencies": {
+    "@opennextjs/cloudflare": "^1.20.18",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "next": "16.4.5",
@@ -38,6 +41,8 @@
     "eslint-config-next": "16.4.5",
     "prisma": "^7.10.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
-  }
+    "typescript": "^5",
+    "wrangler": "^4.166.0"
+  },
+  "packageManager": "pnpm@12.18.0"
 }
