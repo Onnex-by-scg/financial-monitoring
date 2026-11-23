@@ -1,12 +1,12 @@
 import { PeakError } from "@/lib/peak/client";
 import { route } from "@/lib/peak/route-helpers";
 import { updateSettings } from "@/lib/peak/settings-store";
-import { clampAutoPull, clampPageSize, clampPageWait, getSyncConfig, MAX_INTERVAL_MINUTES, MIN_INTERVAL_MINUTES } from "@/lib/sync/config";
-import { AUTO_PULL_MAX_MINUTES, PAGE_WAIT_MAX_SECONDS, PEAK_PAGE_SIZE_MAX, PEAK_PAGE_SIZE_MIN } from "@/lib/settings-types";
+import { clampPageSize, clampPageWait, getSyncConfig, MAX_INTERVAL_MINUTES, MIN_INTERVAL_MINUTES } from "@/lib/sync/config";
+import { PAGE_WAIT_MAX_SECONDS, PEAK_PAGE_SIZE_MAX, PEAK_PAGE_SIZE_MIN } from "@/lib/settings-types";
 import { restartSchedule } from "@/lib/sync/scheduler";
 
 // GET /api/settings/sync -> { enabled, intervalMinutes, skipClosedUat, fromSettings }
-// PUT /api/settings/sync { enabled, intervalMinutes, skipClosedUat, peakPageSize?, pageWaitSeconds?, autoPullMinutes? } -> saves to the database
+// PUT /api/settings/sync { enabled, intervalMinutes, skipClosedUat, peakPageSize?, pageWaitSeconds? } -> saves to the database
 // (lib/peak/settings-store.ts). The page fields are optional; left out, the saved values are kept.
 // The scheduler re-reads it within 30 seconds; the next round is counted from the save.
 export const GET = route(async () => getSyncConfig());
@@ -25,10 +25,6 @@ export const PUT = route(async (_req, body) => {
   if (!Number.isFinite(wait) || wait < 0 || wait > PAGE_WAIT_MAX_SECONDS) {
     throw new PeakError(400, `The wait between pages must be from 0 to ${PAGE_WAIT_MAX_SECONDS} seconds.`);
   }
-  const autoPull = body.autoPullMinutes === undefined ? current.autoPullMinutes : Number(body.autoPullMinutes);
-  if (!Number.isFinite(autoPull) || autoPull < 0 || autoPull > AUTO_PULL_MAX_MINUTES) {
-    throw new PeakError(400, `"Pull when older than" must be from 0 (off) to ${AUTO_PULL_MAX_MINUTES / 1440} days.`);
-  }
   await updateSettings((s) => {
     s.sync = {
       enabled: body.enabled !== false,
@@ -36,7 +32,6 @@ export const PUT = route(async (_req, body) => {
       skipClosedUat: body.skipClosedUat !== false,
       peakPageSize: clampPageSize(pageSize),
       pageWaitSeconds: clampPageWait(wait),
-      autoPullMinutes: clampAutoPull(autoPull),
     };
   });
   restartSchedule();

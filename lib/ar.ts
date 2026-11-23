@@ -60,8 +60,6 @@ export interface ArResponse {
   debug: ArDebug;
   /** A sync (pull from PEAK / NetSuite into the database) is running; the page reloads when it ends. */
   refreshing?: boolean;
-  /** The saved data is older than Settings → Data sync allows: the page should ask for a pull. */
-  autoPull?: boolean;
   /** The last sync failed after this data was saved: the numbers shown are from fetchedAt. */
   syncError?: { message: string; status: number | null; at: string } | null;
   /** Last finished sync for this tab (from the database). */

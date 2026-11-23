@@ -74,30 +74,25 @@ PEAK UAT is only open Mon–Fri 08:00–22:00 Bangkok time.
 
 ## Database and sync service
 
-The dashboard never calls PEAK or NetSuite itself. A sync service pulls the data into the database, and `/api/ar` only reads the database.
+The dashboard never calls PEAK or NetSuite itself. A sync service pulls the data into a SQLite database, and `/api/ar` only reads the database.
 
 ```
 PEAK / NetSuite ──(sync service: lib/sync/ar-sync.ts)──> Postgres (Supabase) ──(/api/ar)──> dashboard
-                  ▲ opening a tab with no data, or data older than Settings allows
-                  ▲ ↻ Refresh on the dashboard, Pull all now in Settings
-                  ▲ every 15 min (lib/sync/scheduler.ts; long-running servers only, not Netlify)
+                  ▲ every 15 min (lib/sync/scheduler.ts)
+                  ▲ ↻ Refresh on the dashboard
+                  ▲ first visit to a tab with no data yet
                   ▲ POST /api/sync
 ```
 
-- **Who runs a pull** (`components/pull.ts`, `lib/sync/pull.ts`): the page asks for it and follows its progress. On **Netlify** it goes to the background function `netlify/pull-background.ts` (served at `/.netlify/functions/pull-background`), which can run 15 minutes, so a full NetSuite read (about 4–5 min) finishes; normal requests stop at 30 seconds. Anywhere else (`pnpm dev`, `next start`) it goes to `POST /api/pull`, which runs it in the app after answering. The request names only the tab and kind; the function reads the PEAK / NetSuite keys from the saved settings in the database itself, so they never pass through the browser. The browser calls the function directly (not the app's server) so the site's team login protects it like every other page.
-- **Building the function:** `pnpm build` runs `next build`, then `scripts/build-functions.mjs` bundles `netlify/pull-background.ts` and the `lib/` code it uses into `netlify/functions/pull-background.mjs` (git-ignored), which Netlify deploys. `NEXT_PUBLIC_PULL_VIA` (set in `next.config.ts` from Netlify's `NETLIFY=true` build variable) tells the page which way to send pulls.
-- **When a dashboard opens: Settings → Data sync.** A tab whose last pull (good or failed) is older than "Pull a company whose data is older than" (default 30 min; Never = only Refresh) is pulled in the background while the saved data shows, at most once per tab per visit. A tab with nothing saved is always pulled; the page shows the loading card until it's done.
-
 - **Database:** Prisma 7 + Postgres on Supabase, project `testProject` (`prisma/schema.prisma`, client in `lib/db.ts` via `@prisma/adapter-pg`). Set `DATABASE_URL` in `.env.local` to the project's Session pooler connection string (see `.env.example`). Tables have Row Level Security on with no policies, so Supabase's public REST API can't read them; the server connects as `postgres` and isn't affected. `npm run dev` / `npm start` apply migrations first (`prisma migrate deploy`); `npm install` generates the client. `npm run db:studio` opens a table browser.
 - **Tables:** `PnlMonth` (one month of profit & loss per PEAK company), `ArSnapshot` (one per tab: business name, source, as-of date, projects, warnings, Debug info), `ArInvoice` (its outstanding invoices), `SyncRun` (every pull: trigger, status, full/update, error), `SyncState` (NetSuite's update state).
-- **A pull replaces the tab's snapshot in one transaction**, so the page never sees half a pull.
-- **One pull per tab at a time, across server instances** (`lib/sync/runs.ts`): starting a pull takes a Postgres advisory lock, checks `SyncRun` for a running pull of the same tab and kind, and records a new one in the same transaction. A second request skips (or, for the scheduler, waits). A running pull saves its progress and a heartbeat on its row; one that stops reporting for 5 minutes (e.g. Netlify ended the function) is marked failed so it can't block later pulls.
-- **Credentials:** each snapshot records a hash of the keys it was read with. After keys change in Settings, the old data isn't shown; the next visit pulls again. Removing a tab in Settings deletes its rows.
+- **A pull replaces the tab's snapshot in one transaction**, so the page never sees half a pull. One pull per tab at a time; a second request joins the running one.
+- **Credentials:** each snapshot records a hash of the keys it was read with. After keys change in Settings, the old data isn't shown; the next visit waits for a new pull. Removing a tab in Settings deletes its rows.
 - **Failures keep the last good data.** The dashboard shows it with "Last update failed (time): <plain explanation>" and Try again.
 - **Schedule: Settings → Data sync.** Turn scheduled pulls on/off and pick the interval (5 min – 24 h; presets or a custom number of minutes), and whether to skip PEAK UAT outside Mon–Fri 08:00–22:00 Bangkok. Saved with the other settings in the database (`sync`); the scheduler re-reads it every 30 seconds, so no restart is needed, and the next round is counted from the save. Until it's saved, `SYNC_INTERVAL_MINUTES` (default 15) applies. 10 seconds after the server starts, tabs whose data is older than the interval are pulled. `SYNC_SCHEDULE=0` or sample mode turn scheduling off on the server regardless (the page says so). The same page shows each tab's last pull, the next round, the recent pulls, and **Pull all now**.
-- **↻ Refresh** asks for a pull; the saved data stays on screen (dimmed and locked) with a progress card, and the page reloads when the pull ends.
-- **Progress, step by step** (`lib/sync/progress.ts`, `components/SyncProgress.tsx`): every pull reports its steps, which the first-load screen and the Refresh banner show with a bar, the current activity and counts. PEAK: connecting → customer names → outstanding invoices → project groups → amounts due (only if the list left them out) → each invoice's project → saving. NetSuite full read: every page (n of N) → saving; update: newest pages → re-checking last time's open invoices (n of N) → saving. Skipped steps say why; a switch from update to full read is explained above the steps. `/api/ar/progress` and `/api/pnl/progress` read it from the pull's `SyncRun` row, so it shows whichever instance runs the pull.
-- **API:** `GET /api/sync` shows each tab (running?) and the last 50 pulls; `POST /api/sync[?entity=<id>]` starts a pull now (`npm run sync` does this for all tabs); `POST /api/pull?kind=ar|pnl|all&entity=<id>[&year=yyyy]` is what the page uses off Netlify. Same-origin only; the server binds to 127.0.0.1.
+- **↻ Refresh** starts a pull and returns at once with the saved data; the page reloads when the pull ends.
+- **Progress, step by step** (`lib/sync/progress.ts`, `components/SyncProgress.tsx`): every pull reports its steps, which the first-load screen and the Refresh banner show with a bar, the current activity and counts. PEAK: connecting → customer names → outstanding invoices → project groups → amounts due (only if the list left them out) → each invoice's project → saving. NetSuite full read: every page (n of N) → saving; update: newest pages → re-checking last time's open invoices (n of N) → saving. Skipped steps say why; a switch from update to full read is explained above the steps. `/api/ar/progress` serves it from memory.
+- **API:** `GET /api/sync` shows each tab (running?) and the last 50 pulls; `POST /api/sync[?entity=<id>]` starts a pull now (`npm run sync` does this for all tabs). Same-origin only; the server binds to 127.0.0.1.
 - **Financial Performance** is stored the same way: see that page's section below. Settings → Data sync lists its pulls as "P&L".
 
 ## What it shows
@@ -172,6 +167,6 @@ Monthly profit & loss for one PEAK company, switched to with the **AR Aging / Fi
   - months never read;
   - this month and last month (still being booked or closed), every round;
   - older months once a day.
-- **When it pulls:** every scheduled round and **Pull all now** (after the company's AR: this year, plus December in January); **Refresh** on the page (in the background, with a progress bar); opening a year with months never read, or whose current months are older than the "when a dashboard opens" setting (the page shows progress; reading a whole year takes a little over a minute). A failed pull keeps the saved months and says so. Months saved by the old file cache (`.peak/cache/peak-pnl-<company>.json`) are imported on first use.
+- **When it pulls:** every scheduled round and **Pull all now** (after the company's AR: this year, plus December in January); **Refresh** on the page (in the background, with a progress bar); opening a year with months never read (the page waits and shows progress; reading a whole year takes a little over a minute). A failed pull keeps the saved months and says so. Months saved by the old file cache (`.peak/cache/peak-pnl-<company>.json`) are imported on first use.
 - NetSuite tabs are disabled here: the SCG RESTlet has no P&L or trial-balance endpoint.
 - Sample mode (`pnpm dev:sample`) serves made-up months (`lib/sample-pnl.ts`).

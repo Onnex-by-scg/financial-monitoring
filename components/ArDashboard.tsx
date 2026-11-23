@@ -22,7 +22,7 @@ import { ProjectPicker } from "./ProjectPicker";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { AppNav } from "./AppNav";
 import { CompanySwitcher } from "./CompanySwitcher";
-import { FirstPullCard, HeaderProgress, progressPercent, RefreshVeil, usePull, type SyncProgressView } from "./SyncProgress";
+import { FirstPullCard, HeaderProgress, progressPercent, RefreshVeil, useSyncProgress, type SyncProgressView } from "./SyncProgress";
 import { DebugButton, DebugContext, fieldsFor, PROVIDER_LABEL, type DebugSpec } from "./DebugPanel";
 
 type ArGroup = "current" | "overdue";
@@ -37,7 +37,7 @@ export default function ArDashboard() {
   const [entity, setEntity] = useState<string | null>(null);
   const [data, setData] = useState<ArResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<{ message: string; code: string | null; status: number | null; entity?: string | null } | null>(null);
+  const [error, setError] = useState<{ message: string; code: string | null; status: number | null } | null>(null);
   // Tabs come from Settings, not from the last AR response, so they stay usable when one tab fails to load.
   const [tabs, setTabs] = useState<ArEntity[] | null>(null);
 
@@ -66,27 +66,25 @@ export default function ArDashboard() {
   // (e.g. PEAK still loading after switching to a NetSuite tab) must not overwrite the current tab.
   const latestRequest = useRef(0);
 
-  // Reads the tab from the database only; pulls are asked for separately (usePull below).
   const load = useCallback(
-    async () => {
+    async (opts: { refresh?: boolean } = {}) => {
       const requestId = ++latestRequest.current;
       const isStale = () => requestId !== latestRequest.current;
       setLoading(true);
       setError(null);
       const q = new URLSearchParams();
       if (entity) q.set("entity", entity);
+      if (opts.refresh) q.set("refresh", "1");
       try {
         const res = await fetch(`/api/ar?${q}`, { cache: "no-store" });
         const json = await res.json().catch(() => ({ error: `Unexpected response (HTTP ${res.status})` }));
         if (isStale()) return;
-        if (!res.ok)
-          throw Object.assign(new Error(json.error ?? `HTTP ${res.status}`), { code: json.code ?? null, status: res.status, entity: json.entity ?? null });
+        if (!res.ok) throw Object.assign(new Error(json.error ?? `HTTP ${res.status}`), { code: json.code ?? null, status: res.status });
         setData(json as ArResponse);
       } catch (e) {
         if (isStale()) return;
-        const err = e as Error & { code?: string | null; status?: number; entity?: string | null };
-        const code = err.code ?? null;
-        setError({ message: err.message, code, status: err.status ?? null, entity: err.entity ?? null });
+        const code = (e as Error & { code?: string | null }).code ?? null;
+        setError({ message: (e as Error).message, code, status: (e as Error & { status?: number }).status ?? null });
         // Keep showing the data only when it's this tab's (a failed refresh); never another tab's numbers under this tab.
         setData((d) => (code !== "not_configured" && d && (!entity || d.entity === entity) ? d : null));
       } finally {
@@ -312,30 +310,10 @@ export default function ArDashboard() {
   const entities = tabs ?? data?.entities ?? [];
   const activeEntity = entity ?? data?.entity ?? entities[0]?.id ?? null;
   const activeProvider: Provider = entities.find((e) => e.id === activeEntity)?.provider ?? provider;
-  const pull = usePull({
-    entity: activeEntity,
-    kind: "ar",
-    watch: Boolean(data?.refreshing && data.entity === activeEntity),
-    onDone: () => void load(), // a pull finished: reload this tab from the database
+  const syncProgress = useSyncProgress(activeEntity, loading || Boolean(data?.refreshing), () => {
+    // A background pull finished: reload this tab from the database (no new pull).
+    if (data?.refreshing) void load();
   });
-  const syncProgress = pull.progress;
-  const pulling = pull.pending || Boolean(syncProgress) || Boolean(data?.refreshing && data.entity === activeEntity);
-  // Opening a tab pulls it when it has nothing saved or its data is older than Settings allows: once per tab per
-  // visit, so a pull that fails isn't retried in a loop (Retry / Refresh still can).
-  const [autoTried, setAutoTried] = useState<string[]>([]);
-  const notPulled = error?.code === "not_pulled" && error.entity === activeEntity;
-  const wantsPull = !loading && !pulling && ((data?.autoPull && data.entity === activeEntity) || notPulled);
-  useEffect(() => {
-    if (!wantsPull || !activeEntity || autoTried.includes(activeEntity)) return;
-    // Recording the attempt is the point of this effect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAutoTried((t) => [...t, activeEntity]);
-    void pull.start();
-    // pull.start is recreated each render; the guard above makes this run once per tab
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wantsPull, activeEntity, autoTried]);
-  // Nothing saved for this tab yet and its first pull is running (or about to start): show the loading card, not an error.
-  const firstPull = notPulled && !pull.startError && (pulling || !autoTried.includes(activeEntity ?? ""));
 
   return (
     <div className="min-h-screen bg-[#F3F6FA] text-ink">
@@ -381,12 +359,12 @@ export default function ArDashboard() {
             <SourceBadge data={data} />
             <button
               type="button"
-              onClick={() => void pull.start()}
-              disabled={loading || pulling}
+              onClick={() => load({ refresh: true })}
+              disabled={loading}
               className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-slate-50 disabled:opacity-50"
             >
-              <RefreshIcon spinning={loading || pulling} />
-              {pulling ? (syncProgress ? `Pulling… ${progressPercent(syncProgress)}%` : "Starting…") : loading ? "Loading…" : "Refresh"}
+              <RefreshIcon spinning={loading} />
+              {loading || data?.refreshing ? (syncProgress ? `Pulling… ${progressPercent(syncProgress)}%` : "Loading…") : "Refresh"}
             </button>
             <Link
               href="/settings"
@@ -404,31 +382,28 @@ export default function ArDashboard() {
             <AppNav />
           </div>
         </div>
-        <HeaderProgress active={pulling} progress={syncProgress} source={PROVIDER_LABEL[activeProvider]} />
+        <HeaderProgress active={Boolean(data?.refreshing || syncProgress)} progress={syncProgress} source={PROVIDER_LABEL[activeProvider]} />
       </header>
 
       <main className="mx-auto max-w-[1600px] px-6 py-5">
         {error?.code === "not_configured" && <ConnectPrompt message={error.message} />}
-        {pull.startError && !pulling && (
-          <LoadErrorCard error={{ message: pull.startError, status: null }} provider={activeProvider} staleSince={data?.fetchedAt ?? null} loading={loading} onRetry={() => void pull.start()} />
-        )}
-        {!error && data?.syncError && !pulling && (
+        {!error && data?.syncError && !data.refreshing && (
           <LoadErrorCard
             error={data.syncError}
             provider={activeProvider}
             staleSince={data.fetchedAt}
             failedAt={data.syncError.at}
             loading={loading}
-            onRetry={() => void pull.start()}
+            onRetry={() => load({ refresh: true })}
           />
         )}
-        {error && error.code !== "not_configured" && !firstPull && (
+        {error && error.code !== "not_configured" && (
           <LoadErrorCard
             error={error}
             provider={activeProvider}
             staleSince={data && data.entity === activeEntity ? data.fetchedAt : null}
             loading={loading}
-            onRetry={() => (error.code === "not_pulled" ? void pull.start() : void load())}
+            onRetry={() => load({ refresh: true })}
           />
         )}
         {data?.warnings.map((w) => (
@@ -437,11 +412,11 @@ export default function ArDashboard() {
           </div>
         ))}
 
-        {!data && ((loading && !error) || firstPull) && <LoadingSkeleton provider={activeProvider} progress={syncProgress} />}
+        {!data && loading && !error && <LoadingSkeleton provider={activeProvider} progress={syncProgress} />}
 
         {data && (
           <DebugContext.Provider value={{ data, filters: filterText }}>
-            <RefreshVeil active={pulling} source={PROVIDER_LABEL[activeProvider]} progress={syncProgress} savedAt={fmtDateTime(data.fetchedAt)}>
+            <RefreshVeil active={Boolean(data.refreshing)} source={PROVIDER_LABEL[activeProvider]} progress={syncProgress} savedAt={fmtDateTime(data.fetchedAt)}>
             <div key={data.entity} className={`space-y-5 transition-opacity duration-300 ${loading ? "opacity-60" : ""}`}>
               {/* Filters: one row above everything they filter */}
               <section aria-label="Filters" className="rounded-2xl border border-slate-200/70 bg-white p-3 shadow-sm rise-in" style={{ "--d": "0ms" } as React.CSSProperties}>

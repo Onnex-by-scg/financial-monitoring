@@ -46,8 +46,6 @@ export interface PnlResponse {
   debug: { baseUrl: string; calls: { path: string; ms: number; cached: boolean; error?: string }[] };
   /** A pull of the trial balance into the database is running; the page reloads when it ends. */
   refreshing?: boolean;
-  /** Months are missing or old: the page should ask for a pull. */
-  autoPull?: boolean;
   /** The last pull failed: the months shown are the ones saved before it. */
   syncError?: { message: string; status: number | null; at: string } | null;
   /** Last finished pull for this company (from the database). */

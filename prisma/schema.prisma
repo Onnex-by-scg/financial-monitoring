@@ -70,10 +70,6 @@ model SyncRun {
   error       String?
   errorStatus Int?
   note        String?
-  /// JSON: SyncProgress (lib/sync/progress.ts), written while the pull runs, so any server instance can show it
-  progress    String?
-  /// Last sign of life from a running pull; a "running" row that stops reporting is treated as dead (lib/sync/runs.ts)
-  heartbeatAt DateTime?
 
   @@index([entityId, startedAt])
 }

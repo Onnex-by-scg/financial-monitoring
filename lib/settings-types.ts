@@ -88,8 +88,6 @@ export const PEAK_PAGE_SIZE_MIN = 1;
 export const PEAK_PAGE_SIZE_MAX = 100; // PEAK's maximum `limit`
 export const PEAK_PAGE_SIZE_DEFAULT = 100;
 export const PAGE_WAIT_MAX_SECONDS = 60;
-export const AUTO_PULL_DEFAULT_MINUTES = 30;
-export const AUTO_PULL_MAX_MINUTES = 7 * 24 * 60;
 
 export interface SyncConfigView {
   enabled: boolean;
@@ -101,8 +99,6 @@ export interface SyncConfigView {
   peakPageSize: number;
   /** Seconds to wait between page requests (PEAK and NetSuite). 0 = no wait. */
   pageWaitSeconds: number;
-  /** Opening a dashboard pulls a tab whose data is older than this (minutes). 0 = only on Refresh. */
-  autoPullMinutes: number;
 }
 
 export interface SyncRunView {

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  AUTO_PULL_MAX_MINUTES,
   PAGE_WAIT_MAX_SECONDS,
   PEAK_PAGE_SIZE_MAX,
   PEAK_PAGE_SIZE_MIN,
@@ -11,7 +10,6 @@ import {
   type SyncRunView,
   type SyncStatusView,
 } from "@/lib/settings-types";
-import { requestPull } from "../pull";
 import { api, timeAgo } from "./api";
 import { Alert, Button, Card, Toggle } from "./ui";
 
@@ -20,16 +18,8 @@ import { Alert, Button, Card, Toggle } from "./ui";
 const PRESETS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
 const PAGE_SIZE_PRESETS = [10, 25, 50, 100];
 const WAIT_PRESETS = [0, 2, 5, 10, 30];
-const AUTO_PULL_PRESETS = [0, 15, 30, 60, 240, 1440];
 
-type Form = {
-  enabled: boolean;
-  intervalMinutes: number;
-  skipClosedUat: boolean;
-  peakPageSize: number;
-  pageWaitSeconds: number;
-  autoPullMinutes: number;
-};
+type Form = { enabled: boolean; intervalMinutes: number; skipClosedUat: boolean; peakPageSize: number; pageWaitSeconds: number };
 
 export function minutesLabel(m: number): string {
   if (m < 60) return `${m} min`;
@@ -60,7 +50,6 @@ export function SyncSection() {
             skipClosedUat: s.config.skipClosedUat,
             peakPageSize: s.config.peakPageSize,
             pageWaitSeconds: s.config.pageWaitSeconds,
-            autoPullMinutes: s.config.autoPullMinutes,
           },
       );
       setLoadError(null);
@@ -90,16 +79,13 @@ export function SyncSection() {
     form.intervalMinutes !== saved.intervalMinutes ||
     form.skipClosedUat !== saved.skipClosedUat ||
     form.peakPageSize !== saved.peakPageSize ||
-    form.pageWaitSeconds !== saved.pageWaitSeconds ||
-    form.autoPullMinutes !== saved.autoPullMinutes;
+    form.pageWaitSeconds !== saved.pageWaitSeconds;
   const fetchValid =
     Number.isInteger(form.peakPageSize) &&
     form.peakPageSize >= PEAK_PAGE_SIZE_MIN &&
     form.peakPageSize <= PEAK_PAGE_SIZE_MAX &&
     form.pageWaitSeconds >= 0 &&
-    form.pageWaitSeconds <= PAGE_WAIT_MAX_SECONDS &&
-    form.autoPullMinutes >= 0 &&
-    form.autoPullMinutes <= AUTO_PULL_MAX_MINUTES;
+    form.pageWaitSeconds <= PAGE_WAIT_MAX_SECONDS;
   const customMinutes = Number(custom);
   const customValid = custom === "" || (Number.isFinite(customMinutes) && customMinutes >= SYNC_MIN_MINUTES && customMinutes <= SYNC_MAX_MINUTES);
   const hasNetSuite = status.tabs.some((t) => t.provider === "netsuite");
@@ -125,7 +111,7 @@ export function SyncSection() {
   const pullNow = async () => {
     setPulling(true);
     try {
-      await requestPull({ kind: "all" }); // on Netlify: the background function, so a long NetSuite read can finish
+      await api.syncNow();
       await refresh();
     } finally {
       setPulling(false);
@@ -217,25 +203,6 @@ export function SyncSection() {
               hint="UAT is open Mon–Fri 08:00–22:00."
             />
           )}
-
-          <div className="space-y-2 rounded-xl border border-slate-200/80 p-4">
-            <p className="text-sm font-semibold text-slate-900">When a dashboard opens</p>
-            <NumberChoice
-              label="Pull a company whose data is older than"
-              presets={AUTO_PULL_PRESETS}
-              value={form.autoPullMinutes}
-              onChange={(autoPullMinutes) => setForm({ ...form, autoPullMinutes })}
-              format={(n) => (n === 0 ? "Never" : minutesLabel(n))}
-              min={0}
-              max={AUTO_PULL_MAX_MINUTES}
-              unit="minutes"
-            />
-            <p className="text-xs text-slate-500">
-              {form.autoPullMinutes === 0
-                ? "Data is only pulled by Refresh (and the schedule, where it runs)."
-                : "The saved data shows at once and updates in the background. A company with nothing saved is always pulled."}
-            </p>
-          </div>
 
           <ArFetch form={form} setForm={setForm} hasPeak={hasPeak} hasNetSuite={hasNetSuite} />
 

@@ -1,7 +1,6 @@
 // Step-by-step progress of a running pull, for the dashboard's loading bar ("what is it doing now").
 // The sync service creates one per pull; the PEAK / NetSuite loaders plan their steps and report into it.
-// The sync service also saves it on the pull's SyncRun row as it changes (lib/sync/runs.ts), so GET /api/ar/progress
-// can show it from any server instance (on Netlify the pull runs in a separate background function).
+// Kept in server memory only and read by GET /api/ar/progress (which never calls PEAK / NetSuite).
 
 export type StepStatus = "pending" | "active" | "done" | "skipped";
 
@@ -38,6 +37,10 @@ export interface Reporter {
   skip(key: string, note?: string): void;
 }
 
+const store = new Map<string, SyncProgress>();
+
+export const getSyncProgress = (entityId: string): SyncProgress | null => store.get(entityId) ?? null;
+
 /** A reporter that does nothing (loaders called outside a pull). */
 export const noProgress: Reporter = { plan() {}, start() {}, tick() {}, setTotal() {}, done() {}, skip() {} };
 
@@ -45,11 +48,11 @@ export const noProgress: Reporter = { plan() {}, start() {}, tick() {}, setTotal
 export const SAVE_STEP = "save";
 const saveStep = (): SyncStep => ({ key: SAVE_STEP, label: "Saving to the database", status: "pending", done: 0, total: null, unit: null, note: null });
 
-/** A pull's progress. `onChange` is called after every change (the sync service saves it, throttled). */
-export function beginProgress(provider: SyncProgress["provider"], onChange: (p: SyncProgress) => void = () => {}): Reporter & { finish(): void } {
+export function beginProgress(entityId: string, provider: SyncProgress["provider"]): Reporter & { finish(): void } {
   const p: SyncProgress = { running: true, provider, startedAt: Date.now(), finishedAt: null, steps: [saveStep()], note: null };
+  store.set(entityId, p);
   const step = (key: string) => p.steps.find((s) => s.key === key);
-  const reporter: Reporter & { finish(): void } = {
+  return {
     plan(steps, note = null) {
       // Keep the "save" step (added by the sync service) at the end, and keep progress already made on reused keys.
       const old = new Map(p.steps.map((s) => [s.key, s]));
@@ -92,14 +95,4 @@ export function beginProgress(provider: SyncProgress["provider"], onChange: (p: 
       p.finishedAt = Date.now();
     },
   };
-  // Report every change, without repeating the method bodies above.
-  for (const key of Object.keys(reporter) as (keyof typeof reporter)[]) {
-    const fn = reporter[key] as (...args: unknown[]) => void;
-    (reporter as unknown as Record<string, (...args: unknown[]) => void>)[key] = (...args) => {
-      fn(...args);
-      onChange(p);
-    };
-  }
-  onChange(p);
-  return reporter;
 }

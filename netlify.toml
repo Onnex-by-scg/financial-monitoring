@@ -10,6 +10,4 @@
 
 # Runtime variables are set on the Netlify project (values here only reach the build), including
 # SYNC_SCHEDULE=0: the app runs as serverless functions, so the in-process sync timer (instrumentation.ts)
-# can't run. Pulls run in the background function netlify/functions/pull-background.mjs (built from
-# netlify/pull-background.ts by `pnpm build`, up to 15 minutes), started by the dashboard when a tab's data
-# is missing or older than Settings → Data sync allows, by Refresh, and by "Pull all now".
+# can't run. Pull data with Refresh in the dashboard, or POST /api/sync from a scheduler.

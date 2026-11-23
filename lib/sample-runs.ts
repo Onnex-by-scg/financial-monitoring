@@ -1,7 +1,4 @@
-import type { SyncRun as SyncRunRow } from "./generated/prisma/client";
-
-/** A pull as listed by the sync status API (without its progress JSON). */
-export type SyncRun = Omit<SyncRunRow, "progress" | "heartbeatAt">;
+import type { SyncRun } from "./generated/prisma/client";
 
 // Made-up pull history for sample mode (lib/mode.ts), so Settings → Data sync has something to show.
 // One AR pull per tab every 15 minutes, newest first, with a P&L pull after each PEAK one and the odd failure.

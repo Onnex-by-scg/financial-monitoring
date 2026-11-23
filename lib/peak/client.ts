@@ -16,7 +16,7 @@ export class PeakError extends Error {
   constructor(
     public status: number,
     message: string,
-    public code?: "not_configured" | "invalid" | "test_failed" | "not_pulled",
+    public code?: "not_configured" | "invalid" | "test_failed",
   ) {
     super(message);
   }
