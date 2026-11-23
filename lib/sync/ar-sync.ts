@@ -1,5 +1,5 @@
 import "server-only";
-import { after } from "next/server";
+import { runPull } from "./run-pull";
 import type { ArDebug, ArEntity, ArInvoice, ArResponse, ArSource, ProjectInfo } from "../ar";
 import { db } from "../db";
 import { loadNetSuiteAr, nsCredKey, type NsSyncState } from "../netsuite/ar-source";
@@ -140,8 +140,7 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
     snap = await db.arSnapshot.findUnique({ where: { entityId: target.id } });
     if (!snap) throw new PeakError(500, "The pull finished but saved nothing.");
   } else if (opts.refresh) {
-    // Runs in the background (the page polls); after() keeps a serverless function alive until it ends.
-    after(syncEntity(target, entities, "refresh").catch(() => undefined));
+    await runPull(() => syncEntity(target, entities, "refresh")); // background, or waited for on Workers (run-pull.ts)
   }
 
   const [rows, lastRun] = await Promise.all([

@@ -1,5 +1,5 @@
 import "server-only";
-import { after } from "next/server";
+import { runPull } from "./run-pull";
 import { bangkokToday } from "../ar";
 import { db } from "../db";
 import { BASE_URLS, PeakError } from "../peak/client";
@@ -134,8 +134,7 @@ export async function readPnl(entityId: string | null, year: number, opts: { ref
   if (missing.length) {
     await syncPnl(target, "first-load", year).catch((e) => (pullError = e)); // the page waits for this
   } else if (opts.refresh) {
-    // Runs in the background (the page polls); after() keeps a serverless function alive until it ends.
-    after(syncPnl(target, "refresh", year).catch(() => undefined));
+    await runPull(() => syncPnl(target, "refresh", year)); // background, or waited for on Workers (run-pull.ts)
   }
 
   const [rows, lastRun, snap] = await Promise.all([

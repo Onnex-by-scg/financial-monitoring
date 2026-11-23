@@ -1,13 +1,13 @@
-import { after } from "next/server";
 import { route } from "@/lib/peak/route-helpers";
 import { isSyncing, listTargets, recentRuns, syncEntity } from "@/lib/sync/ar-sync";
 import { isPnlSyncing, syncPnl } from "@/lib/sync/pnl-sync";
 import { syncAll } from "@/lib/sync/round";
 import { getSyncConfig, scheduleBlockedBy } from "@/lib/sync/config";
 import { nextRoundAt } from "@/lib/sync/scheduler";
+import { runPull } from "@/lib/sync/run-pull";
 
 // GET  /api/sync               -> sync status: schedule, next round, each tab (running?) and the last 50 pulls.
-// POST /api/sync[?entity=<id>] -> start a pull now (one tab, or all tabs one after another). Returns at once.
+// POST /api/sync[?entity=<id>] -> start a pull now (one tab, or all tabs one after another). Returns at once (on Workers: when the pull ends; lib/sync/run-pull.ts).
 // Same-origin only (route()), and the server binds to 127.0.0.1.
 export const GET = route(async () => {
   const [{ targets }, config, next] = await Promise.all([listTargets().catch(() => ({ targets: [] })), getSyncConfig(), nextRoundAt()]);
@@ -26,16 +26,13 @@ export const POST = route(async (req) => {
   if (entity) {
     const t = targets.find((x) => x.id === entity);
     if (!t) return { started: false, error: "Unknown tab" };
-    // after(): the response goes out at once, and the host (Netlify) keeps the function running until the pull ends
-    // (up to its time limit) instead of freezing it.
-    after(() =>
+    await runPull(() =>
       syncEntity(t, entities, "api")
         .catch(() => undefined)
-        .then(() => (t.provider === "peak" ? syncPnl(t, "api", null) : undefined))
-        .catch(() => undefined),
+        .then(() => (t.provider === "peak" ? syncPnl(t, "api", null) : undefined)),
     );
     return { started: true, tabs: [t.id] };
   }
-  after(() => syncAll("api").catch(() => undefined));
+  await runPull(() => syncAll("api"));
   return { started: true, tabs: targets.map((t) => t.id) };
 });
