@@ -1,4 +1,4 @@
-// Runs after `next build` (package.json "build"). Removes packages the server never loads from Next's file traces
+// Runs after `next build` (package.json "build:next"). Removes packages the server never loads from Next's file traces
 // (.next/server/**/*.nft.json), which list the files a deployment copies next to the server code.
 //
 // Why: the Prisma client is generated for Cloudflare Workers (prisma/schema.prisma: runtime = "cloudflare"), and

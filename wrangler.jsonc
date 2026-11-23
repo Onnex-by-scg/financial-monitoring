@@ -4,7 +4,7 @@
 // (Settings → Variables and Secrets) or with `wrangler secret put`, never here: this file is committed.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "financial-monitoring-dashboard",
+  "name": "financial-monitoring",
   "main": "worker.ts",
   "compatibility_date": "2026-11-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
