@@ -1,5 +1,4 @@
 import "server-only";
-import { after } from "next/server";
 import fs from "node:fs/promises";
 import { bangkokToday } from "../ar";
 import { db } from "../db";
@@ -8,6 +7,8 @@ import { legacyPnlFile, readLegacyPnl, readTrialBalanceMonth } from "../peak/pnl
 import { monthsFor, type PnlAccount, type PnlLine, type PnlMonth, type PnlResponse } from "../pnl";
 import { listTargets, type SyncTrigger, type Target } from "./ar-sync";
 import { beginProgress, SAVE_STEP } from "./progress";
+import { getSyncConfig } from "./config";
+import { claimRun, isRunning, progressSaver, waitForRun } from "./runs";
 import { SAMPLE_MODE } from "../mode";
 
 // The sync service for Financial Performance: reads PEAK's trial balance month by month and stores each month in
@@ -25,10 +26,8 @@ const OLD_MONTH_MS = 24 * 60 * 60 * 1000;
 /** Recent months read less than this long ago aren't read again (e.g. Refresh right after a scheduled round). */
 const RECENT_MIN_AGE_MS = 60 * 1000;
 
+/** Pulls started by this server instance (others are found through the database). */
 const running = new Map<string, Promise<void>>();
-export const isPnlSyncing = (entityId: string) => running.has(entityId);
-/** Progress for a P&L pull is kept under its own key, next to the tab's AR pull. */
-export const pnlProgressKey = (entityId: string) => `pnl:${entityId}`;
 
 const thisAndLastMonth = (today = bangkokToday()) => {
   const [y, m] = today.split("-").map(Number);
@@ -80,23 +79,48 @@ function plan(year: number | null, stored: Map<string, number>, trigger: SyncTri
 }
 
 /**
- * Pulls the months that need it for one PEAK company. Waits for a pull already running for the company first
- * (then plans again, so nothing is read twice). Resolves when done; rejects if a month failed.
+ * Pulls the months that need it for one PEAK company. If a pull is already running for the company (here or on
+ * another instance), waits for it and plans again, so nothing is read twice; with ifBusy "skip" returns at once.
+ * Resolves when done; rejects if a month failed.
  */
-export async function syncPnl(target: PeakTarget, trigger: SyncTrigger, year: number | null, opts: { recentMinAgeMs?: number } = {}): Promise<void> {
+export async function syncPnl(
+  target: PeakTarget,
+  trigger: SyncTrigger,
+  year: number | null,
+  opts: { recentMinAgeMs?: number; ifBusy?: "wait" | "skip" } = {},
+): Promise<void> {
   if (SAMPLE_MODE) return; // sample P&L is generated on read
-  for (let r = running.get(target.id); r; r = running.get(target.id)) await r.catch(() => undefined);
-  const p = runPnl(target, trigger, year, opts.recentMinAgeMs ?? RECENT_MIN_AGE_MS).finally(() => running.delete(target.id));
+  for (let r = running.get(target.id); r; r = running.get(target.id)) {
+    if (opts.ifBusy === "skip") return;
+    await r.catch(() => undefined);
+  }
+  const p = runPnl(target, trigger, year, opts.recentMinAgeMs ?? RECENT_MIN_AGE_MS, opts.ifBusy ?? "wait").finally(() => running.delete(target.id));
   running.set(target.id, p);
   return p;
 }
 
-async function runPnl(target: PeakTarget, trigger: SyncTrigger, year: number | null, recentMinAgeMs: number): Promise<void> {
+async function runPnl(target: PeakTarget, trigger: SyncTrigger, year: number | null, recentMinAgeMs: number, ifBusy: "wait" | "skip"): Promise<void> {
+  const mode = String(year ?? bangkokToday().slice(0, 4));
+  let runId: number;
+  for (;;) {
+    const claim = await claimRun({ entityId: target.id, provider: "peak", kind: "pnl", trigger, mode });
+    if ("runId" in claim) {
+      runId = claim.runId;
+      break;
+    }
+    if (ifBusy === "skip") return;
+    await waitForRun(claim.busy).catch(() => undefined);
+  }
   const months = plan(year, await storedMonths(target), trigger, recentMinAgeMs);
-  if (!months.length) return;
+  if (!months.length) {
+    // Recorded so a page that asked for this pull sees it finish.
+    await db.syncRun.update({ where: { id: runId }, data: { status: "ok", finishedAt: new Date(), note: "Already up to date" } });
+    return;
+  }
 
-  const progress = beginProgress(pnlProgressKey(target.id), "peak");
-  const run = await db.syncRun.create({ data: { entityId: target.id, provider: "peak", kind: "pnl", mode: String(year ?? bangkokToday().slice(0, 4)), trigger, status: "running" } });
+  const saver = progressSaver(runId);
+  const progress = beginProgress("peak", saver.onChange);
+  const run = { id: runId };
   progress.plan(
     [{ key: "months", label: "Reading the trial balance", unit: "months", total: months.length }],
     months.length > 10 ? "PEAK allows 10 trial-balance reads a minute, so this takes a little over a minute." : null,
@@ -130,14 +154,15 @@ async function runPnl(target: PeakTarget, trigger: SyncTrigger, year: number | n
     throw e;
   } finally {
     progress.finish();
+    await saver.stop();
   }
 }
 
 /**
- * The page's read: one PEAK company's P&L for a year, from the database. Months never read are pulled first (the
- * page waits and shows progress); Refresh starts a pull in the background. Never calls PEAK otherwise.
+ * The page's read: one PEAK company's P&L for a year, from the database. Never calls PEAK. `autoPull` tells the page
+ * to ask for a pull: months of the year were never read, or this month's figures are older than Settings allows.
  */
-export async function readPnl(entityId: string | null, year: number, opts: { refresh?: boolean } = {}): Promise<PnlResponse> {
+export async function readPnl(entityId: string | null, year: number): Promise<PnlResponse> {
   const { targets } = await listTargets();
   const peak = targets.filter((t): t is PeakTarget => t.provider === "peak");
   if (!peak.length) throw new PeakError(409, "No PEAK company is connected yet. Open Settings to connect one.", "not_configured");
@@ -147,20 +172,14 @@ export async function readPnl(entityId: string | null, year: number, opts: { ref
 
   const stored = await storedMonths(target);
   const missing = need.filter((ym) => !stored.has(ym));
-  let pullError: unknown = null;
-  if (missing.length) {
-    await syncPnl(target, "first-load", year).catch((e) => (pullError = e)); // the page waits for this
-  } else if (opts.refresh) {
-    // Runs in the background (the page polls); after() keeps a serverless function alive until it ends.
-    after(syncPnl(target, "refresh", year).catch(() => undefined));
-  }
 
-  const [rows, lastRun, snap] = await Promise.all([
+  const [rows, lastRun, snap, refreshing, config] = await Promise.all([
     db.pnlMonth.findMany({ where: { entityId: target.id, credKey: target.credKey, month: { in: need } }, orderBy: { month: "asc" } }),
     db.syncRun.findFirst({ where: { entityId: target.id, kind: "pnl", mode: String(year), status: { in: ["ok", "error"] } }, orderBy: { startedAt: "desc" } }),
     db.arSnapshot.findUnique({ where: { entityId: target.id }, select: { businessName: true, credKey: true } }),
+    isRunning(target.id, "pnl"),
+    getSyncConfig(),
   ]);
-  if (pullError && !rows.length) throw pullError; // nothing to show
   const months: PnlMonth[] = rows.map((r) => ({
     month: `${r.month.slice(0, 4)}-${r.month.slice(4)}`,
     totals: JSON.parse(r.totals) as Record<PnlLine, number>,
@@ -170,6 +189,16 @@ export async function readPnl(entityId: string | null, year: number, opts: { ref
   const warnings = gaps.length ? [`Not read from PEAK yet: ${gaps.map((ym) => `${ym.slice(4)}/${ym.slice(0, 4)}`).join(", ")}. The totals leave these months out.`] : [];
   const oldest = rows.length ? Math.min(...rows.map((r) => r.fetchedAt.getTime())) : Date.now();
   const failed = lastRun?.status === "error";
+  // Ask for a pull when months are missing, or (this year) when the open months were read longer ago than the setting.
+  // Measured from the last attempt, good or failed, so a failing source isn't retried on every visit.
+  const lastTry = (lastRun?.finishedAt ?? lastRun?.startedAt)?.getTime() ?? 0;
+  const openMonths = need.filter((ym) => thisAndLastMonth(today).includes(ym));
+  const openReadAt = openMonths.length ? Math.min(...openMonths.map((ym) => stored.get(ym) ?? 0)) : Infinity;
+  const ageMs = Date.now() - Math.max(lastTry, openReadAt === Infinity ? Date.now() : openReadAt);
+  const retryAfterMs = Math.max(config.autoPullMinutes, 5) * 60_000;
+  const autoPull =
+    !refreshing &&
+    (missing.length > 0 ? !(failed && Date.now() - lastTry < retryAfterMs) : config.autoPullMinutes > 0 && ageMs > config.autoPullMinutes * 60_000);
 
   return {
     entity: target.id,
@@ -182,7 +211,8 @@ export async function readPnl(entityId: string | null, year: number, opts: { ref
     fetchedAt: new Date(oldest).toISOString(),
     warnings,
     debug: { baseUrl: BASE_URLS[target.company.conn.env], calls: [] },
-    refreshing: isPnlSyncing(target.id),
+    refreshing,
+    autoPull,
     syncError: failed ? { message: lastRun.error ?? "Unknown error", status: lastRun.errorStatus, at: (lastRun.finishedAt ?? lastRun.startedAt).toISOString() } : null,
     lastSync: lastRun ? { at: (lastRun.finishedAt ?? lastRun.startedAt).toISOString(), trigger: lastRun.trigger, status: lastRun.status } : null,
   };

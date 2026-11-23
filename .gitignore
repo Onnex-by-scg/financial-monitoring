@@ -55,3 +55,6 @@ package-lock.json
 
 # Netlify CLI link state
 .netlify
+
+# Built by scripts/build-functions.mjs from netlify/pull-background.ts
+/netlify/functions/

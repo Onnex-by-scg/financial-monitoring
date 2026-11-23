@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { SyncProgress as SyncProgressData, SyncStep } from "@/lib/sync/progress";
+import { PULL_VIA, requestPull } from "./pull";
 
 // What a running pull (PEAK / NetSuite → database) is doing, step by step: an overall bar, the current activity,
-// and the step list. Fed by GET /api/ar/progress, which reads server memory only.
+// and the step list. Fed by GET /api/ar/progress (or /api/pnl/progress), which reads the pull's row in the database.
 
 export type SyncProgressView = SyncProgressData & { seconds: number };
 
@@ -247,38 +248,100 @@ function StepIcon({ status }: { status: SyncStep["status"] }) {
   return <span className="mt-0.5 size-4 shrink-0 rounded-full border-2 border-slate-200" aria-label="waiting" />;
 }
 
-/** While `active`, polls the progress endpoint every second for a tab; calls onDone when a running pull ends. */
-export function useSyncProgress(entity: string | null, active: boolean, onDone: () => void, endpoint = "/api/ar/progress"): SyncProgressView | null {
+/** How often the page checks a running pull. Slower on Netlify, where every check is a billed request. */
+const POLL_MS = PULL_VIA === "netlify" ? 3000 : 1000;
+/** A requested pull that never shows up (e.g. the function didn't start) stops being waited for after this. */
+const START_TIMEOUT_MS = 90_000;
+
+type ProgressReply = (SyncProgressView & { latestRunId?: number }) | { running: false; latestRunId?: number };
+
+/**
+ * Pulls for one dashboard tab. `start()` asks the server for a pull (components/pull.ts); while one is pending, or
+ * while `watch` is true (the server says one is running), the progress endpoint is polled. `onDone` runs when a pull
+ * ends, so the page can reload its data from the database.
+ */
+export function usePull({
+  entity,
+  kind,
+  year = null,
+  watch,
+  onDone,
+}: {
+  entity: string | null;
+  kind: "ar" | "pnl";
+  year?: number | null;
+  watch: boolean;
+  onDone: () => void;
+}): { progress: SyncProgressView | null; pending: boolean; start: () => Promise<void>; startError: string | null } {
+  const endpoint = kind === "ar" ? "/api/ar/progress" : "/api/pnl/progress";
   const [progress, setProgress] = useState<SyncProgressView | null>(null);
+  const [pending, setPending] = useState<{ entity: string; baseline: number; since: number } | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
   const onDoneRef = useRef(onDone);
+  const pendingRef = useRef(pending);
   useEffect(() => {
     onDoneRef.current = onDone;
+    pendingRef.current = pending;
   });
+
+  const check = async (id: string): Promise<ProgressReply> =>
+    (await (await fetch(`${endpoint}?entity=${encodeURIComponent(id)}`, { cache: "no-store" })).json()) as ProgressReply;
+
+  const start = async () => {
+    if (!entity || pendingRef.current) return;
+    setStartError(null);
+    // The newest pull row before asking: a newer one that has finished means our pull came and went.
+    const baseline = await check(entity).then((p) => p.latestRunId ?? 0, () => 0);
+    const mine = { entity, baseline, since: Date.now() };
+    pendingRef.current = mine;
+    setPending(mine);
+    try {
+      if (!(await requestPull({ kind, entity, year }))) {
+        pendingRef.current = null;
+        setPending(null);
+        onDoneRef.current();
+      }
+    } catch (e) {
+      pendingRef.current = null;
+      setPending(null);
+      setStartError((e as Error).message);
+    }
+  };
+
+  const active = Boolean(entity) && (watch || pending?.entity === entity);
   useEffect(() => {
     if (!entity || !active) return;
     let wasRunning = false;
     let stopped = false;
+    const finish = () => {
+      wasRunning = false;
+      pendingRef.current = null;
+      setPending(null);
+      onDoneRef.current();
+    };
     const tick = async () => {
       try {
-        const p = (await (await fetch(`${endpoint}?entity=${encodeURIComponent(entity)}`, { cache: "no-store" })).json()) as SyncProgressView | { running: false };
+        const p = await check(entity);
         if (stopped) return;
         setProgress(p.running ? (p as SyncProgressView) : null);
+        const mine = pendingRef.current?.entity === entity ? pendingRef.current : null;
         if (p.running) wasRunning = true;
-        else if (wasRunning) {
-          wasRunning = false;
-          onDoneRef.current();
-        }
+        else if (wasRunning || (mine && (p.latestRunId ?? 0) > mine.baseline)) finish();
+        else if (mine && Date.now() - mine.since > START_TIMEOUT_MS) finish();
       } catch {
-        // ignore; the main request reports errors
+        // ignore; the page's own request reports errors
       }
     };
     void tick();
-    const id = setInterval(tick, 1000);
+    const id = setInterval(tick, POLL_MS);
     return () => {
       stopped = true;
       clearInterval(id);
       setProgress(null);
     };
+    // check() only depends on endpoint
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity, active, endpoint]);
-  return progress;
+
+  return { progress, pending: pending?.entity === entity && entity !== null, start, startError };
 }

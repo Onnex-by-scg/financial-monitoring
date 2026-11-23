@@ -1,7 +1,8 @@
 import { after } from "next/server";
 import { route } from "@/lib/peak/route-helpers";
-import { isSyncing, listTargets, recentRuns, syncEntity } from "@/lib/sync/ar-sync";
-import { isPnlSyncing, syncPnl } from "@/lib/sync/pnl-sync";
+import { listTargets, recentRuns, syncEntity } from "@/lib/sync/ar-sync";
+import { syncPnl } from "@/lib/sync/pnl-sync";
+import { isRunning } from "@/lib/sync/runs";
 import { syncAll } from "@/lib/sync/round";
 import { getSyncConfig, scheduleBlockedBy } from "@/lib/sync/config";
 import { nextRoundAt } from "@/lib/sync/scheduler";
@@ -15,7 +16,9 @@ export const GET = route(async () => {
     config,
     blockedBy: scheduleBlockedBy(),
     nextRunAt: next ? new Date(next).toISOString() : null,
-    tabs: targets.map((t) => ({ id: t.id, name: t.name, provider: t.provider, running: isSyncing(t.id) || isPnlSyncing(t.id) })),
+    tabs: await Promise.all(
+      targets.map(async (t) => ({ id: t.id, name: t.name, provider: t.provider, running: (await isRunning(t.id, "ar")) || (await isRunning(t.id, "pnl")) })),
+    ),
     runs: await recentRuns(),
   };
 });

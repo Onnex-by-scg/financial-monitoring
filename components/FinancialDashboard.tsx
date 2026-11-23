@@ -8,7 +8,7 @@ import { addTotals, MONTH_SHORT, PNL_LABEL, PNL_LINES, summarizePnl, type PnlLin
 import { AppNav } from "./AppNav";
 import { CompanySwitcher } from "./CompanySwitcher";
 import { ProfitBars, QuarterBars, RevenueMarginChart, Waterfall, type WaterfallStep } from "./pnl-charts";
-import { FirstPullCard, HeaderProgress, progressPercent, RefreshVeil, useSyncProgress, type SyncProgressView } from "./SyncProgress";
+import { FirstPullCard, HeaderProgress, progressPercent, RefreshVeil, usePull, type SyncProgressView } from "./SyncProgress";
 
 // Financial Performance: monthly P&L for one PEAK company. Read from the database, which the sync service fills from
 // PEAK's trial balance (lib/sync/pnl-sync.ts).
@@ -40,15 +40,15 @@ export default function FinancialDashboard() {
       .catch(() => undefined);
   }, []);
 
+  // Reads the database only; pulls are asked for separately (usePull below).
   const load = useCallback(
-    async (refresh = false) => {
+    async () => {
       const id = ++latest.current;
       setLoading(true);
       setError(null);
       const q = new URLSearchParams();
       if (year) q.set("year", String(year));
       if (entity) q.set("entity", entity);
-      if (refresh) q.set("refresh", "1");
       try {
         const res = await fetch(`/api/pnl?${q}`, { cache: "no-store" });
         const json = await res.json().catch(() => ({ error: `Unexpected response (HTTP ${res.status})` }));
@@ -72,16 +72,31 @@ export default function FinancialDashboard() {
   }, [load]);
 
   const activeEntity = entity ?? data?.entity ?? tabs?.find((t) => t.provider === "peak")?.id ?? null;
-  const refreshing = Boolean(data?.refreshing);
-  const progress = useSyncProgress(
-    activeEntity,
-    loading || refreshing,
-    () => {
-      // A background pull finished: reload from the database (no new pull).
-      if (refreshing) void load();
-    },
-    "/api/pnl/progress",
-  );
+  const shownYear = data?.year ?? year;
+  const pull = usePull({
+    entity: activeEntity,
+    kind: "pnl",
+    year: shownYear,
+    watch: Boolean(data?.refreshing && data.entity === activeEntity),
+    onDone: () => void load(), // a pull finished: reload from the database
+  });
+  const progress = pull.progress;
+  const refreshing = pull.pending || Boolean(progress) || Boolean(data?.refreshing && data.entity === activeEntity);
+
+  // Opening a company/year pulls it when months are missing or old: once per company and year per visit, so a
+  // failing pull isn't retried in a loop (Refresh still can).
+  const [autoTried, setAutoTried] = useState<string[]>([]);
+  const autoKey = activeEntity && data ? `${activeEntity}:${data.year}` : null;
+  const wantsPull = !loading && !refreshing && Boolean(data?.autoPull && data.entity === activeEntity);
+  useEffect(() => {
+    if (!wantsPull || !autoKey || autoTried.includes(autoKey)) return;
+    // Recording the attempt is the point of this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAutoTried((t) => [...t, autoKey]);
+    void pull.start();
+    // pull.start is recreated each render; the guard above makes this run once per company and year
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantsPull, autoKey, autoTried]);
   const view = useMemo(() => (data ? buildView(data) : null), [data]);
   const cy = data?.currentYear;
   const years = cy ? [cy, cy - 1, cy - 2] : [];
@@ -133,11 +148,11 @@ export default function FinancialDashboard() {
             {data?.source === "sample" && <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">Sample data</span>}
             <button
               type="button"
-              onClick={() => load(true)}
+              onClick={() => void pull.start()}
               disabled={loading || refreshing}
               className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
             >
-              {loading || refreshing ? (progress ? `Pulling… ${progressPercent(progress)}%` : "Loading…") : "Refresh"}
+              {refreshing ? (progress ? `Pulling… ${progressPercent(progress)}%` : "Starting…") : loading ? "Loading…" : "Refresh"}
             </button>
             <Link href="/settings" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
               Settings
@@ -150,7 +165,7 @@ export default function FinancialDashboard() {
             <AppNav />
           </div>
         </div>
-        <HeaderProgress active={Boolean(refreshing || progress)} progress={progress} source="PEAK" />
+        <HeaderProgress active={refreshing} progress={progress} source="PEAK" />
       </header>
 
       <main className="mx-auto max-w-[1600px] space-y-5 px-6 py-5">
@@ -167,15 +182,16 @@ export default function FinancialDashboard() {
             )}
           </div>
         )}
-        {!error && data?.syncError && !refreshing && <SyncErrorNote error={data.syncError} onRetry={() => load(true)} />}
+        {pull.startError && !refreshing && <SyncErrorNote error={{ message: pull.startError, status: null, at: new Date().toISOString() }} onRetry={() => void pull.start()} />}
+        {!error && data?.syncError && !refreshing && <SyncErrorNote error={data.syncError} onRetry={() => void pull.start()} />}
         {data?.warnings.map((w) => (
           <div key={w} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             {w}
           </div>
         ))}
 
-        {loading && !view && <Skeleton progress={progress} />}
-        {view && data && view.months.length === 0 && <div className="rounded-xl bg-white p-8 text-center text-slate-500 shadow-sm">No months to show for {data.year}.</div>}
+        {((loading && !view) || (refreshing && view?.months.length === 0)) && <Skeleton progress={progress} />}
+        {view && data && view.months.length === 0 && !refreshing && !wantsPull && <div className="rounded-xl bg-white p-8 text-center text-slate-500 shadow-sm">No months to show for {data.year}.</div>}
 
         {view && data && view.months.length > 0 && (
           <RefreshVeil active={refreshing} source="PEAK" progress={progress} savedAt={fmtDateTime(data.fetchedAt)}>

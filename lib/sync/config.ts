@@ -1,7 +1,7 @@
 import "server-only";
 import { readSettings, type SyncSettings } from "../peak/settings-store";
 import { SAMPLE_MODE } from "../mode";
-import { PAGE_WAIT_MAX_SECONDS, PEAK_PAGE_SIZE_DEFAULT, PEAK_PAGE_SIZE_MAX, PEAK_PAGE_SIZE_MIN } from "../settings-types";
+import { AUTO_PULL_DEFAULT_MINUTES, AUTO_PULL_MAX_MINUTES, PAGE_WAIT_MAX_SECONDS, PEAK_PAGE_SIZE_DEFAULT, PEAK_PAGE_SIZE_MAX, PEAK_PAGE_SIZE_MIN } from "../settings-types";
 
 // How often the scheduler pulls. Settings → Data sync (saved in the database) wins; otherwise the
 // SYNC_INTERVAL_MINUTES env var; otherwise 15 minutes. Sample mode (lib/mode.ts) or SYNC_SCHEDULE=0 turn it off entirely.
@@ -14,10 +14,12 @@ export const DEFAULT_SYNC: Required<SyncSettings> = {
   skipClosedUat: true,
   peakPageSize: PEAK_PAGE_SIZE_DEFAULT,
   pageWaitSeconds: 0,
+  autoPullMinutes: AUTO_PULL_DEFAULT_MINUTES,
 };
 
 export const clampPageSize = (n: number) => Math.min(PEAK_PAGE_SIZE_MAX, Math.max(PEAK_PAGE_SIZE_MIN, Math.round(n)));
 export const clampPageWait = (n: number) => Math.min(PAGE_WAIT_MAX_SECONDS, Math.max(0, Math.round(n)));
+export const clampAutoPull = (n: number) => Math.min(AUTO_PULL_MAX_MINUTES, Math.max(0, Math.round(n)));
 
 /** How a pull pages through PEAK / NetSuite. Passed to the AR loaders (lib/sync/ar-sync.ts). */
 export interface FetchPacing {
@@ -51,7 +53,8 @@ export async function getSyncConfig(): Promise<Required<SyncSettings> & { fromSe
         skipClosedUat: s.skipClosedUat ?? true,
         peakPageSize: clampPageSize(s.peakPageSize ?? PEAK_PAGE_SIZE_DEFAULT),
         pageWaitSeconds: clampPageWait(s.pageWaitSeconds ?? 0),
+        autoPullMinutes: clampAutoPull(s.autoPullMinutes ?? AUTO_PULL_DEFAULT_MINUTES),
         fromSettings: true,
       }
-    : { ...DEFAULT_SYNC, peakPageSize: PEAK_PAGE_SIZE_DEFAULT, pageWaitSeconds: 0, fromSettings: false };
+    : { ...DEFAULT_SYNC, fromSettings: false };
 }

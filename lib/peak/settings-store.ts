@@ -69,6 +69,8 @@ export interface SyncSettings {
   peakPageSize?: number;
   /** Seconds between page requests (0–60). Absent = 0. */
   pageWaitSeconds?: number;
+  /** Opening a dashboard pulls a tab whose data is older than this many minutes (0 = only on Refresh). Absent = 30. */
+  autoPullMinutes?: number;
 }
 
 type Source = "sample" | "db" | "file" | "env" | "none";

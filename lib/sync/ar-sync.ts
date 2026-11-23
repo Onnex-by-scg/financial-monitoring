@@ -1,5 +1,4 @@
 import "server-only";
-import { after } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ArDebug, ArEntity, ArInvoice, ArResponse, ArSource, ProjectInfo } from "../ar";
@@ -9,16 +8,18 @@ import { getArData as getPeakAr } from "../peak/ar-source";
 import { hash, PeakError, type Company } from "../peak/client";
 import { readSettings, resolveCompanies, type StoredNetSuite } from "../peak/settings-store";
 import { beginProgress, SAVE_STEP } from "./progress";
-import { getFetchPacing } from "./config";
+import { getFetchPacing, getSyncConfig } from "./config";
+import { claimRun, isRunning, progressSaver, waitForRun } from "./runs";
 import { SAMPLE_MODE } from "../mode";
 import { sampleRuns } from "../sample-runs";
 
-// The sync service (AR part; profit & loss is lib/sync/pnl-sync.ts, whole rounds lib/sync/round.ts): pulls AR from PEAK / NetSuite and stores it in SQLite (lib/db.ts). The dashboard only reads
-// the database (readAr); pulls happen on a schedule (lib/sync/scheduler.ts), when someone clicks Refresh, or the
-// first time a tab is opened.
+// The sync service (AR part; profit & loss is lib/sync/pnl-sync.ts, whole rounds lib/sync/round.ts): pulls AR from
+// PEAK / NetSuite and stores it in the database (lib/db.ts). The dashboard only reads the database (readAr).
+// Pulls are requested by the page (Refresh, or opening a tab whose data is old or missing: lib/sync/pull.ts), and
+// run on a schedule when the app runs as a long-lived server (lib/sync/scheduler.ts).
 //
-// One pull per tab at a time. A failed pull keeps the last good data and is recorded in SyncRun, so the
-// dashboard can say "showing data from <time>; the last update failed because …".
+// One pull per tab at a time, across server instances (lib/sync/runs.ts). A failed pull keeps the last good data
+// and is recorded in SyncRun, so the dashboard can say "showing data from <time>; the last update failed because …".
 
 export type SyncTrigger = "schedule" | "refresh" | "first-load" | "api";
 
@@ -26,8 +27,8 @@ export type Target =
   | { provider: "peak"; id: string; name: string; company: Company; credKey: string }
   | { provider: "netsuite"; id: string; name: string; conn: StoredNetSuite; credKey: string };
 
+/** Pulls started by this server instance (others are found through the database). */
 const running = new Map<string, Promise<void>>();
-export const isSyncing = (entityId: string) => running.has(entityId);
 
 const peakCredKey = (c: Company) => `${c.id}|${c.conn.env}|${hash(`${c.conn.connectId}|${c.conn.connectKey}|${c.userToken}`)}`;
 
@@ -42,19 +43,27 @@ export async function listTargets(): Promise<{ entities: ArEntity[]; targets: Ta
   return { entities: targets.map((t) => ({ id: t.id, name: t.name, provider: t.provider })), targets };
 }
 
-/** Starts a pull for one tab, or joins the one already running. Resolves when it ends; rejects if it failed. */
-export function syncEntity(target: Target, entities: ArEntity[], trigger: SyncTrigger): Promise<void> {
+/**
+ * Starts a pull for one tab. If one is already running (here or on another instance), waits for it instead, or with
+ * ifBusy "skip" returns at once. Resolves when it ends; rejects if it failed.
+ */
+export function syncEntity(target: Target, entities: ArEntity[], trigger: SyncTrigger, opts: { ifBusy?: "wait" | "skip" } = {}): Promise<void> {
   if (SAMPLE_MODE) return Promise.resolve(); // sample data is generated on read; nothing to pull
   const existing = running.get(target.id);
-  if (existing) return existing;
-  const p = runSync(target, entities, trigger).finally(() => running.delete(target.id));
+  if (existing) return opts.ifBusy === "skip" ? Promise.resolve() : existing;
+  const p = (async () => {
+    const claim = await claimRun({ entityId: target.id, provider: target.provider, kind: "ar", trigger });
+    if ("busy" in claim) return opts.ifBusy === "skip" ? undefined : waitForRun(claim.busy);
+    await runSync(target, entities, claim.runId);
+  })().finally(() => running.delete(target.id));
   running.set(target.id, p);
   return p;
 }
 
-async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigger): Promise<void> {
-  const progress = beginProgress(target.id, target.provider);
-  const run = await db.syncRun.create({ data: { entityId: target.id, provider: target.provider, trigger, status: "running" } });
+async function runSync(target: Target, entities: ArEntity[], runId: number): Promise<void> {
+  const saver = progressSaver(runId);
+  const progress = beginProgress(target.provider, saver.onChange);
+  const run = { id: runId };
   try {
     let data: ArResponse;
     let mode: string | null = null;
@@ -89,6 +98,7 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
     throw e;
   } finally {
     progress.finish();
+    await saver.stop();
   }
 }
 
@@ -128,27 +138,30 @@ async function saveSnapshot(target: Target, data: ArResponse) {
 }
 
 /**
- * The dashboard's read: the tab's data from the database. If the tab has never been pulled (or its credentials
- * changed), this waits for the first pull. Never calls PEAK / NetSuite otherwise.
+ * The dashboard's read: the tab's data from the database. Never calls PEAK / NetSuite. If the tab has nothing saved
+ * yet (or its credentials changed), throws 404 "not_pulled" (with the last pull's error, if it failed); the page then
+ * asks for a pull. `autoPull` tells the page the saved data is older than Settings → Data sync allows.
  */
-export async function readAr(entityId: string | null, opts: { refresh?: boolean } = {}): Promise<ArResponse> {
+export async function readAr(entityId: string | null): Promise<ArResponse> {
   const { entities, targets } = await listTargets();
   if (!targets.length) throw new PeakError(409, "No company is connected yet. Open Settings to connect PEAK or NetSuite.", "not_configured");
   const target = targets.find((t) => t.id === entityId) ?? targets[0];
 
-  let snap = await db.arSnapshot.findUnique({ where: { entityId: target.id } });
+  const snap = await db.arSnapshot.findUnique({ where: { entityId: target.id } });
   if (!snap || snap.credKey !== target.credKey) {
-    await syncEntity(target, entities, "first-load"); // throws the pull's error if there's nothing to show
-    snap = await db.arSnapshot.findUnique({ where: { entityId: target.id } });
-    if (!snap) throw new PeakError(500, "The pull finished but saved nothing.");
-  } else if (opts.refresh) {
-    // Runs in the background (the page polls); after() keeps a serverless function alive until it ends.
-    after(syncEntity(target, entities, "refresh").catch(() => undefined));
+    const last = await db.syncRun.findFirst({ where: { entityId: target.id, kind: "ar" }, orderBy: { id: "desc" } });
+    const failed = last?.status === "error" ? last : null;
+    throw Object.assign(new PeakError(404, failed?.error ?? "Nothing saved for this company yet.", "not_pulled"), {
+      entity: target.id,
+      lastFailedAt: failed ? (failed.finishedAt ?? failed.startedAt).toISOString() : null,
+    });
   }
 
-  const [rows, lastRun] = await Promise.all([
+  const [rows, lastRun, refreshing, config] = await Promise.all([
     db.arInvoice.findMany({ where: { entityId: target.id }, orderBy: { id: "asc" } }),
     db.syncRun.findFirst({ where: { entityId: target.id, kind: "ar", status: { in: ["ok", "error"] } }, orderBy: { startedAt: "desc" } }),
+    isRunning(target.id, "ar"),
+    getSyncConfig(),
   ]);
   const invoices: ArInvoice[] = rows.map((r) => ({
     code: r.code,
@@ -163,6 +176,9 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
     projects: JSON.parse(r.projects),
   }));
   const failedSince = lastRun?.status === "error" && lastRun.startedAt > snap.fetchedAt;
+  // Old = the last attempt (good or failed) is older than the setting, so a failing source isn't retried on every visit.
+  const lastTry = Math.max(snap.fetchedAt.getTime(), (lastRun?.finishedAt ?? lastRun?.startedAt)?.getTime() ?? 0);
+  const autoPull = !refreshing && config.autoPullMinutes > 0 && Date.now() - lastTry > config.autoPullMinutes * 60_000;
 
   return {
     entity: target.id,
@@ -176,7 +192,8 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
     projects: JSON.parse(snap.projects) as ProjectInfo,
     warnings: JSON.parse(snap.warnings) as string[],
     debug: { ...(JSON.parse(snap.debug) as ArDebug), servedFromCache: true },
-    refreshing: isSyncing(target.id),
+    refreshing,
+    autoPull,
     syncError: failedSince ? { message: lastRun.error ?? "Unknown error", status: lastRun.errorStatus, at: (lastRun.finishedAt ?? lastRun.startedAt).toISOString() } : null,
     lastSync: lastRun ? { at: (lastRun.finishedAt ?? lastRun.startedAt).toISOString(), trigger: lastRun.trigger, status: lastRun.status, mode: lastRun.mode } : null,
   };
@@ -196,7 +213,7 @@ export async function deleteEntityData(entityId: string) {
 /** Recent pulls, newest first (for the sync status API). */
 export async function recentRuns(limit = 50) {
   if (SAMPLE_MODE) return sampleRuns((await listTargets()).targets, limit);
-  return db.syncRun.findMany({ orderBy: { startedAt: "desc" }, take: limit });
+  return db.syncRun.findMany({ orderBy: { startedAt: "desc" }, take: limit, omit: { progress: true, heartbeatAt: true } });
 }
 
 // ---- One-off: reuse the update state from the old disk cache (.peak/cache/netsuite-<id>.json), so the first

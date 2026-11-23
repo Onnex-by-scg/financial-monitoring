@@ -59,9 +59,8 @@ export const api = {
     call<{ host: string; found: boolean | null; code: string | null }>("GET", `/api/settings/netsuite/resolve?account=${encodeURIComponent(account)}`),
   deleteNetSuite: (id: string) => call<{ settings: PublicSettings }>("DELETE", `/api/settings/netsuite/${encodeURIComponent(id)}`),
   syncStatus: () => call<SyncStatusView>("GET", "/api/sync"),
-  saveSync: (b: { enabled: boolean; intervalMinutes: number; skipClosedUat: boolean; peakPageSize: number; pageWaitSeconds: number }) =>
+  saveSync: (b: { enabled: boolean; intervalMinutes: number; skipClosedUat: boolean; peakPageSize: number; pageWaitSeconds: number; autoPullMinutes: number }) =>
     call<SyncConfigView>("PUT", "/api/settings/sync", b),
-  syncNow: () => call<{ started: boolean }>("POST", "/api/sync"),
 };
 
 /** UAT is only available Mon–Fri, 08:00–22:00 Bangkok time. */

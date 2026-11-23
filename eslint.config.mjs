@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated bundle of netlify/pull-background.ts (scripts/build-functions.mjs).
+    "netlify/functions/**",
   ]),
 ]);
 
