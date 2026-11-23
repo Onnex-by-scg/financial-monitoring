@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import fs from "node:fs/promises";
 import { bangkokToday } from "../ar";
 import { db } from "../db";
@@ -150,7 +151,8 @@ export async function readPnl(entityId: string | null, year: number, opts: { ref
   if (missing.length) {
     await syncPnl(target, "first-load", year).catch((e) => (pullError = e)); // the page waits for this
   } else if (opts.refresh) {
-    syncPnl(target, "refresh", year).catch(() => undefined); // runs in the background; the page polls
+    // Runs in the background (the page polls); after() keeps a serverless function alive until it ends.
+    after(syncPnl(target, "refresh", year).catch(() => undefined));
   }
 
   const [rows, lastRun, snap] = await Promise.all([

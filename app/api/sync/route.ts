@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { route } from "@/lib/peak/route-helpers";
 import { isSyncing, listTargets, recentRuns, syncEntity } from "@/lib/sync/ar-sync";
 import { isPnlSyncing, syncPnl } from "@/lib/sync/pnl-sync";
@@ -25,12 +26,16 @@ export const POST = route(async (req) => {
   if (entity) {
     const t = targets.find((x) => x.id === entity);
     if (!t) return { started: false, error: "Unknown tab" };
-    void syncEntity(t, entities, "api")
-      .catch(() => undefined)
-      .then(() => (t.provider === "peak" ? syncPnl(t, "api", null) : undefined))
-      .catch(() => undefined);
+    // after(): the response goes out at once, and the host (Netlify) keeps the function running until the pull ends
+    // (up to its time limit) instead of freezing it.
+    after(() =>
+      syncEntity(t, entities, "api")
+        .catch(() => undefined)
+        .then(() => (t.provider === "peak" ? syncPnl(t, "api", null) : undefined))
+        .catch(() => undefined),
+    );
     return { started: true, tabs: [t.id] };
   }
-  void syncAll("api");
+  after(() => syncAll("api").catch(() => undefined));
   return { started: true, tabs: targets.map((t) => t.id) };
 });

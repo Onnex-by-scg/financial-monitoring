@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ArDebug, ArEntity, ArInvoice, ArResponse, ArSource, ProjectInfo } from "../ar";
@@ -141,7 +142,8 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
     snap = await db.arSnapshot.findUnique({ where: { entityId: target.id } });
     if (!snap) throw new PeakError(500, "The pull finished but saved nothing.");
   } else if (opts.refresh) {
-    syncEntity(target, entities, "refresh").catch(() => undefined); // runs in the background; the page polls
+    // Runs in the background (the page polls); after() keeps a serverless function alive until it ends.
+    after(syncEntity(target, entities, "refresh").catch(() => undefined));
   }
 
   const [rows, lastRun] = await Promise.all([

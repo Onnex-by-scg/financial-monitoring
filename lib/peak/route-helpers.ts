@@ -17,10 +17,15 @@ export function route(handler: (req: Request, body: Record<string, unknown>) => 
       assertSameOrigin(req);
       let body: Record<string, unknown> = {};
       if (req.method !== "GET" && req.method !== "DELETE") {
-        body =
-          (await req.json().catch(() => {
+        // An empty body (e.g. POST /api/sync from "Pull now") means no fields, not bad JSON.
+        const text = await req.text();
+        if (text.trim()) {
+          try {
+            body = (JSON.parse(text) as Record<string, unknown> | null) ?? {};
+          } catch {
             throw new PeakError(400, "Invalid JSON body");
-          })) ?? {};
+          }
+        }
       }
       return Response.json(await handler(req, body), { headers: { "Cache-Control": "no-store" } });
     } catch (err) {
