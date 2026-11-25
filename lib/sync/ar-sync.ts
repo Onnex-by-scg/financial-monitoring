@@ -2,6 +2,7 @@ import "server-only";
 import { runPull } from "./run-pull";
 import type { ArDebug, ArEntity, ArInvoice, ArResponse, ArSource, ProjectInfo } from "../ar";
 import { db, releaseDb, withDb } from "../db";
+import { blobDelete, blobWrites, getBlob, putBlob } from "../db-blob";
 import { loadNetSuiteAr, nsCredKey, type NsSyncState } from "../netsuite/ar-source";
 import { getArData as getPeakAr } from "../peak/ar-source";
 import { hash, PeakError, type Company } from "../peak/client";
@@ -67,8 +68,8 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
       data = await getPeakAr(target.id, true, progress, pacing);
     } else {
       const stateKey = `ns:${target.id}`;
-      const saved = await db.syncState.findUnique({ where: { key: stateKey } });
-      const parsed = saved ? (JSON.parse(saved.value) as { credKey: string; state: NsSyncState }) : null;
+      const saved = await getBlob(stateKey);
+      const parsed = saved ? (JSON.parse(saved) as { credKey: string; state: NsSyncState }) : null;
       const prev = parsed?.credKey === target.credKey ? parsed.state : null;
       // NetSuite can take minutes to answer; a database connection left idle that long gets dropped (lib/db.ts).
       await releaseDb();
@@ -81,7 +82,7 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
         allowFull: !ON_WORKERS || trigger !== "refresh",
       });
       const value = JSON.stringify({ credKey: target.credKey, state: result.sync });
-      await withDb(() => db.syncState.upsert({ where: { key: stateKey }, create: { key: stateKey, value }, update: { value } }));
+      await withDb(() => putBlob(stateKey, value)); // in pieces: one large statement drops the connection (lib/db-blob.ts)
       if (result.kind !== "done") {
         // Nothing new to show yet: keep the saved snapshot, and say why in the pull history.
         await withDb(() =>
@@ -127,28 +128,37 @@ async function saveSnapshot(target: Target, data: ArResponse) {
     fetchedAt: new Date(data.fetchedAt),
     projects: JSON.stringify(data.projects),
     warnings: JSON.stringify(data.warnings),
-    debug: JSON.stringify({ ...data.debug, servedFromCache: false }),
+    // The debug info grows with the number of invoices, so it is kept in pieces (lib/db-blob.ts).
+    debug: DEBUG_IN_BLOB,
   };
+  const rows = data.invoices.map((i) => ({
+      entityId: target.id,
+      code: i.code,
+      contactCode: i.contactCode,
+      contactName: i.contactName,
+      reference: i.reference,
+      issuedDate: i.issuedDate,
+      dueDate: i.dueDate,
+      netAmount: i.netAmount,
+      remainAmount: i.remainAmount,
+      link: i.link,
+      projects: JSON.stringify(i.projects),
+  }));
+  // On Workers one statement over ~64 KB drops the database connection (lib/db-blob.ts), so invoices are inserted
+  // INVOICE_BATCH at a time. Everything still goes in one transaction, so readers never see half a pull.
+  const batches: (typeof rows)[] = [];
+  for (let i = 0; i < rows.length; i += INVOICE_BATCH) batches.push(rows.slice(i, i + INVOICE_BATCH));
   await db.$transaction([
     db.arSnapshot.upsert({ where: { entityId: target.id }, create: { entityId: target.id, ...snapshot }, update: snapshot }),
+    ...blobWrites(debugKey(target.id), JSON.stringify({ ...data.debug, servedFromCache: false })),
     db.arInvoice.deleteMany({ where: { entityId: target.id } }),
-    db.arInvoice.createMany({
-      data: data.invoices.map((i) => ({
-        entityId: target.id,
-        code: i.code,
-        contactCode: i.contactCode,
-        contactName: i.contactName,
-        reference: i.reference,
-        issuedDate: i.issuedDate,
-        dueDate: i.dueDate,
-        netAmount: i.netAmount,
-        remainAmount: i.remainAmount,
-        link: i.link,
-        projects: JSON.stringify(i.projects),
-      })),
-    }),
+    ...batches.map((data) => db.arInvoice.createMany({ data })),
   ]);
 }
+
+const INVOICE_BATCH = 30;
+const DEBUG_IN_BLOB = "@blob";
+const debugKey = (entityId: string) => `debug:${entityId}`;
 
 /**
  * The dashboard's read: the tab's data from the database. If the tab has never been pulled (or its credentials
@@ -173,11 +183,12 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
     await runPull(() => syncEntity(target, entities, "refresh")); // background, or waited for on Workers (run-pull.ts)
   }
 
-  const [rows, lastRun, lastNote] = await Promise.all([
+  const [rows, lastRun, lastNote, debugText] = await Promise.all([
     db.arInvoice.findMany({ where: { entityId: target.id }, orderBy: { id: "asc" } }),
     db.syncRun.findFirst({ where: { entityId: target.id, kind: "ar", status: { in: ["ok", "error"] } }, orderBy: { startedAt: "desc" } }),
     // A NetSuite full read under way (or left to the schedule) after the saved data: tell the reader.
     db.syncRun.findFirst({ where: { entityId: target.id, kind: "ar", status: { in: ["partial", "skipped"] }, startedAt: { gt: snap.fetchedAt } }, orderBy: { id: "desc" } }),
+    snap.debug === DEBUG_IN_BLOB ? getBlob(debugKey(target.id)) : Promise.resolve(snap.debug),
   ]);
   const invoices: ArInvoice[] = rows.map((r) => ({
     code: r.code,
@@ -204,7 +215,7 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
     invoices,
     projects: JSON.parse(snap.projects) as ProjectInfo,
     warnings: [...(JSON.parse(snap.warnings) as string[]), ...(target.provider === "netsuite" && lastNote?.note ? [lastNote.note] : [])],
-    debug: { ...(JSON.parse(snap.debug) as ArDebug), servedFromCache: true },
+    debug: { ...(JSON.parse(debugText ?? "{}") as ArDebug), servedFromCache: true },
     refreshing: isSyncing(target.id),
     syncError: failedSince ? { message: lastRun.error ?? "Unknown error", status: lastRun.errorStatus, at: (lastRun.finishedAt ?? lastRun.startedAt).toISOString() } : null,
     lastSync: lastRun ? { at: (lastRun.finishedAt ?? lastRun.startedAt).toISOString(), trigger: lastRun.trigger, status: lastRun.status, mode: lastRun.mode } : null,
@@ -217,7 +228,8 @@ export async function deleteEntityData(entityId: string) {
   await db.$transaction([
     db.arSnapshot.deleteMany({ where: { entityId } }), // invoices cascade
     db.syncRun.deleteMany({ where: { entityId } }),
-    db.syncState.deleteMany({ where: { key: `ns:${entityId}` } }),
+    blobDelete(`ns:${entityId}`),
+    blobDelete(debugKey(entityId)),
   ]);
 }
 
