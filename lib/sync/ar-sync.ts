@@ -9,6 +9,7 @@ import { readSettings, resolveCompanies, type StoredNetSuite } from "../peak/set
 import { beginProgress, SAVE_STEP } from "./progress";
 import { getFetchPacing } from "./config";
 import { SAMPLE_MODE } from "../mode";
+import { ON_WORKERS } from "../runtime";
 import { sampleRuns } from "../sample-runs";
 
 // The sync service (AR part; profit & loss is lib/sync/pnl-sync.ts, whole rounds lib/sync/round.ts): pulls AR from PEAK / NetSuite and stores it in SQLite (lib/db.ts). The dashboard only reads
@@ -25,6 +26,10 @@ export type Target =
   | { provider: "netsuite"; id: string; name: string; conn: StoredNetSuite; credKey: string };
 
 const running = new Map<string, Promise<void>>();
+
+// Cloudflare Workers: a NetSuite full read stops starting new pages after this long and continues on the next
+// scheduled pull. A Cron Trigger run may last 15 minutes and one page can take NetSuite up to 3 minutes to build.
+const WORKERS_FULL_READ_BUDGET_MS = 9 * 60_000;
 export const isSyncing = (entityId: string) => running.has(entityId);
 
 const peakCredKey = (c: Company) => `${c.id}|${c.conn.env}|${hash(`${c.conn.connectId}|${c.conn.connectKey}|${c.userToken}`)}`;
@@ -64,14 +69,27 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
       const saved = await db.syncState.findUnique({ where: { key: stateKey } });
       const parsed = saved ? (JSON.parse(saved.value) as { credKey: string; state: NsSyncState }) : null;
       const prev = parsed?.credKey === target.credKey ? parsed.state : null;
-      const result = await loadNetSuiteAr(target.conn, entities, prev, progress, pacing.pageWaitMs);
+      const result = await loadNetSuiteAr(target.conn, entities, prev, progress, {
+        pageWaitMs: pacing.pageWaitMs,
+        // Workers: one 1,000-invoice page in memory at a time, and full reads split over runs that fit the limits.
+        pageConcurrency: ON_WORKERS ? 1 : undefined,
+        deadline: ON_WORKERS ? Date.now() + WORKERS_FULL_READ_BUDGET_MS : undefined,
+        // The dashboard's Refresh only updates (fast); a full read is left to the scheduled pull.
+        allowFull: !ON_WORKERS || trigger !== "refresh",
+      });
+      const value = JSON.stringify({ credKey: target.credKey, state: result.sync });
+      await db.syncState.upsert({ where: { key: stateKey }, create: { key: stateKey, value }, update: { value } });
+      if (result.kind !== "done") {
+        // Nothing new to show yet: keep the saved snapshot, and say why in the pull history.
+        await db.syncRun.update({
+          where: { id: run.id },
+          data: { status: result.kind === "partial" ? "partial" : "skipped", mode: result.kind === "partial" ? "full" : null, finishedAt: new Date(), note: result.note },
+        });
+        progress.skip(SAVE_STEP, result.note);
+        return;
+      }
       data = result.data;
       mode = result.data.debug.sync?.mode ?? null;
-      await db.syncState.upsert({
-        where: { key: stateKey },
-        create: { key: stateKey, value: JSON.stringify({ credKey: target.credKey, state: result.sync }) },
-        update: { value: JSON.stringify({ credKey: target.credKey, state: result.sync }) },
-      });
     }
     progress.start(SAVE_STEP, data.invoices.length);
     await saveSnapshot(target, data);
@@ -138,14 +156,21 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
   if (!snap || snap.credKey !== target.credKey) {
     await syncEntity(target, entities, "first-load"); // throws the pull's error if there's nothing to show
     snap = await db.arSnapshot.findUnique({ where: { entityId: target.id } });
-    if (!snap) throw new PeakError(500, "The pull finished but saved nothing.");
+    if (!snap) {
+      const last = await db.syncRun.findFirst({ where: { entityId: target.id, kind: "ar" }, orderBy: { id: "desc" } });
+      if (last?.note && (last.status === "partial" || last.status === "skipped"))
+        throw new PeakError(503, `The first read of this company's invoices is large and is still running in the background. ${last.note}`);
+      throw new PeakError(500, "The pull finished but saved nothing.");
+    }
   } else if (opts.refresh) {
     await runPull(() => syncEntity(target, entities, "refresh")); // background, or waited for on Workers (run-pull.ts)
   }
 
-  const [rows, lastRun] = await Promise.all([
+  const [rows, lastRun, lastNote] = await Promise.all([
     db.arInvoice.findMany({ where: { entityId: target.id }, orderBy: { id: "asc" } }),
     db.syncRun.findFirst({ where: { entityId: target.id, kind: "ar", status: { in: ["ok", "error"] } }, orderBy: { startedAt: "desc" } }),
+    // A NetSuite full read under way (or left to the schedule) after the saved data: tell the reader.
+    db.syncRun.findFirst({ where: { entityId: target.id, kind: "ar", status: { in: ["partial", "skipped"] }, startedAt: { gt: snap.fetchedAt } }, orderBy: { id: "desc" } }),
   ]);
   const invoices: ArInvoice[] = rows.map((r) => ({
     code: r.code,
@@ -171,7 +196,7 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
     fetchedAt: snap.fetchedAt.toISOString(),
     invoices,
     projects: JSON.parse(snap.projects) as ProjectInfo,
-    warnings: JSON.parse(snap.warnings) as string[],
+    warnings: [...(JSON.parse(snap.warnings) as string[]), ...(target.provider === "netsuite" && lastNote?.note ? [lastNote.note] : [])],
     debug: { ...(JSON.parse(snap.debug) as ArDebug), servedFromCache: true },
     refreshing: isSyncing(target.id),
     syncError: failedSince ? { message: lastRun.error ?? "Unknown error", status: lastRun.errorStatus, at: (lastRun.finishedAt ?? lastRun.startedAt).toISOString() } : null,

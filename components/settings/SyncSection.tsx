@@ -325,6 +325,7 @@ function RunResult({ run }: { run: SyncRunView }) {
       </span>
     );
   if (run.status === "skipped") return <span className="text-slate-500">– Skipped: {run.note}</span>;
+  if (run.status === "partial") return <span className="text-slate-600">… {run.note}</span>;
   if (run.status === "running") return <span className="text-brand">Running…</span>;
   return (
     <span className="text-red-700" title={run.error ?? ""}>

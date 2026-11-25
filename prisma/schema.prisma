@@ -61,7 +61,7 @@ model SyncRun {
   kind        String    @default("ar")
   /// "schedule" | "refresh" | "first-load" | "api"
   trigger     String
-  /// "running" | "ok" | "error" | "skipped"
+  /// "running" | "ok" | "error" | "skipped" | "partial" (a NetSuite full read continued by the next run)
   status      String
   /// NetSuite AR: "full" | "update"; P&L: the year read, e.g. "2026"
   mode        String?

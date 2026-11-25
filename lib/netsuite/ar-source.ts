@@ -20,7 +20,14 @@ import { NS_SCRIPT_2, nsGet, restletHost } from "./client";
 //    to re-check, it does a full read instead. A full read also runs once every FULL_EVERY_MS, to catch the rare
 //    invoice that is reopened after being paid.
 //
-// This file only reads. Storing the result (SQLite) and the update state, and deciding when to read, is the sync
+// Cloudflare Workers have 128 MB of memory per isolate and limited time per run, so:
+//  - each page is reduced to its open invoices (trimmed) as soon as it arrives; whole pages are never kept;
+//  - the caller can read one page at a time (pageConcurrency) and set a deadline: a full read that isn't finished
+//    by then is saved as `partial` and continued by the next run;
+//  - the caller can forbid full reads (allowFull: false, used for the dashboard's Refresh): when an update isn't
+//    possible, the full read is left to the next scheduled pull and the dashboard keeps the last saved data.
+//
+// This file only reads. Storing the result and the update state, and deciding when to read, is the sync
 // service's job: lib/sync/ar-sync.ts.
 
 export const NS_AR_SERVICE = "invoicefromso_lhs";
@@ -31,6 +38,12 @@ const PAGE_TIMEOUT_MS = 180_000; // a 1000-invoice page can take NetSuite a long
 const RECHECK_TIMEOUT_MS = 60_000;
 const BUSY_RETRIES = 3;
 const FULL_EVERY_MS = 24 * 60 * 60 * 1000;
+/** A full read split over several runs is started again if it isn't finished within this time. */
+const PARTIAL_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+/** Up to this many open invoices are re-checked one by one; above it, their pages are re-read when that's fewer calls. */
+const FEW_RECHECKS = 30;
+/** At most this many older pages are re-read in an update (each can take NetSuite a while to build). */
+const MAX_REREAD_PAGES = 5;
 /** Above this many open invoices to re-check one by one, a full read is likely quicker. */
 const MAX_RECHECK = 400;
 
@@ -47,6 +60,21 @@ export interface NsSyncState {
   lastPageIds: string[];
   /** The open invoices (trimmed to the fields the dashboard reads). */
   open: Json[];
+  /** A full read that didn't fit in one run (time budget on Workers); the next allowed run continues it. */
+  partial?: { startedAt: number; nextPage: number; lastPage: number; total: number | null; read: number; open: Json[] } | null;
+  /** A dashboard Refresh needed a full read and left it to the next scheduled pull. */
+  fullRequested?: boolean;
+}
+
+export interface LoadOptions {
+  /** Seconds between page reads (Settings → Data sync). NetSuite's page size itself is fixed at 1,000 by #46. */
+  pageWaitMs?: number;
+  /** Pages read at the same time in a full read (default 4). On Workers 1, so only one large page is in memory. */
+  pageConcurrency?: number;
+  /** A full read stops starting new pages after this time (ms since epoch) and is continued by a later run. */
+  deadline?: number;
+  /** May this run do a full read? When not, and an update isn't possible, the full read is left to the schedule. */
+  allowFull?: boolean;
 }
 
 /** Identifies the credentials a result was read with, so data read with other keys is never reused. */
@@ -59,10 +87,10 @@ export async function loadNetSuiteAr(
   entities: ArEntity[],
   prev: NsSyncState | null,
   progress: Reporter = noProgress,
-  /** Seconds between page reads (Settings → Data sync). NetSuite's page size itself is fixed at 1,000 by #46. */
-  pageWaitMs = 0,
-): Promise<{ data: ArResponse; sync: NsSyncState }> {
-  return load(conn, entities, prev, progress, pageWaitMs > 0 ? makePacer(pageWaitMs) : noPacer);
+  opts: LoadOptions = {},
+): Promise<NsLoadResult> {
+  const pageWaitMs = opts.pageWaitMs ?? 0;
+  return load(conn, entities, prev, progress, pageWaitMs > 0 ? makePacer(pageWaitMs) : noPacer, opts);
 }
 
 /** Paths shown in the Debug panel (host is in debug.baseUrl). */
@@ -83,20 +111,49 @@ function listOf(json: unknown): { rows: Json[]; lastPage: number | null; total: 
 }
 
 type List = ReturnType<typeof listOf>;
+
+/**
+ * One page, reduced as soon as it arrives: the IDs of every invoice on it, and only the open ones (trimmed to the
+ * fields the dashboard reads). A 1,000-invoice page with line items and addresses is many MB of JSON; keeping
+ * whole pages until the end of a read is what pushed the Worker past its 128 MB memory limit (Error 1102).
+ */
+interface Page {
+  ids: string[];
+  open: Json[];
+  count: number;
+  lastPage: number | null;
+  total: number | null;
+}
+const reducePage = (list: List, page: number): Page => ({
+  ids: list.rows.map(idOf),
+  // __page: where the invoice was, so an update can re-read that page instead of looking invoices up one by one.
+  open: list.rows.filter((r) => openAmount(r) !== null).map((r) => ({ ...trim(r), [PAGE_FIELD]: page })),
+  count: list.rows.length,
+  lastPage: list.lastPage,
+  total: list.total,
+});
+
 type ReadResult = { rows: Json[]; sync: NsSyncState };
 
-async function load(
-  conn: StoredNetSuite,
-  entities: ArEntity[],
-  prev: NsSyncState | null,
-  progress: Reporter,
-  pacer: Pacer,
-): Promise<{ data: ArResponse; sync: NsSyncState }> {
+/** What one call to loadNetSuiteAr ended with. */
+export type NsLoadResult =
+  /** New data to save. */
+  | { kind: "done"; data: ArResponse; sync: NsSyncState }
+  /** A full read ran out of time; `sync.partial` holds how far it got, and the next scheduled pull continues it. */
+  | { kind: "partial"; sync: NsSyncState; note: string }
+  /** A full read was needed but not allowed here (dashboard Refresh); the next scheduled pull does it. */
+  | { kind: "deferred"; sync: NsSyncState; note: string };
+
+const NO_BASE: Omit<NsSyncState, "partial" | "fullRequested"> = { fullAt: 0, lastPage: 0, total: null, lastPageIds: [], open: [] };
+
+async function load(conn: StoredNetSuite, entities: ArEntity[], prev: NsSyncState | null, progress: Reporter, pacer: Pacer, opts: LoadOptions): Promise<NsLoadResult> {
   const calls: ApiCall[] = [];
   const warnings: string[] = [];
   let rechecked = 0;
   /** Progress step that page reads count towards ("pages" in a full read, "tail" in an update). */
   let pageStep = "pages";
+  const concurrency = opts.pageConcurrency ?? CONCURRENCY;
+  const deadline = opts.deadline ?? Infinity;
 
   /** One #46 call, retried while NetSuite says it's busy. */
   const request = async (params: Record<string, string>, purpose: ApiCall["purpose"], timeoutMs: number): Promise<List> => {
@@ -131,34 +188,62 @@ async function load(
     }
   };
 
-  const fetchPage = async (page: number) => {
+  const fetchPage = async (page: number): Promise<Page> => {
     // Through the pacer: with a wait set, pages go one at a time with the wait in between.
     const list = await pacer.run(() => request({ "query[current_page]": String(page) }, "ns-invoices", PAGE_TIMEOUT_MS));
     progress.tick(pageStep);
-    return list;
+    return reducePage(list, page);
   };
 
-  // ---- Full read: every page ----
-  const full = async (note: string | null): Promise<ReadResult> => {
+  // ---- Full read: every page, `concurrency` at a time. Stops at the deadline and returns how far it got. ----
+  type Partial = NonNullable<NsSyncState["partial"]>;
+  const full = async (note: string | null, resume: Partial | null): Promise<ReadResult | Partial> => {
     pageStep = "pages";
     progress.plan([{ key: "pages", label: "Reading every invoice from NetSuite (1,000 per page)", unit: "pages" }], note);
     progress.start("pages");
-    const first = await fetchPage(1).catch((e: Error) => {
-      // Point at the endpoint only when NetSuite itself answered (access denied / RESTlet error), not for network failures.
-      const fromNetSuite = e instanceof PeakError && (e.status === 403 || /^NetSuite error/.test(e.message));
-      if (!fromNetSuite) throw e;
-      throw new PeakError(e.status, `${e.message} (endpoint #46 ${NS_AR_SERVICE} on ${NS_SCRIPT_2}. If the token's role can't run that RESTlet, ask the NetSuite admin to grant it.)`);
-    });
-    if (first.lastPage) progress.setTotal("pages", Math.min(first.lastPage, MAX_PAGES));
-    const lastPage = Math.min(first.lastPage ?? 1, MAX_PAGES);
-    if ((first.lastPage ?? 1) > MAX_PAGES) warnings.push(`NetSuite reported ${first.lastPage} pages; only the first ${MAX_PAGES} (${MAX_PAGES * 1000} invoices) were read.`);
-    const rest = lastPage > 1 ? await mapLimit(range(2, lastPage), CONCURRENCY, fetchPage) : [];
-    const pages = [first, ...rest];
-    progress.done("pages", `${pages.reduce((n, p) => n + p.rows.length, 0).toLocaleString("en-US")} invoices read`);
-    return {
-      rows: pages.flatMap((p) => p.rows),
-      sync: { fullAt: Date.now(), lastPage, total: first.total, lastPageIds: pages[pages.length - 1].rows.map(idOf), open: [] },
+    const startedAt = resume?.startedAt ?? Date.now();
+    const open = new Map<string, Json>((resume?.open ?? []).map((r) => [idOf(r), r]));
+    let lastPage: number;
+    let total: number | null;
+    let next: number;
+    let lastIds: string[] = [];
+    let read = resume?.read ?? 0;
+    const keep = (p: Page) => {
+      for (const r of p.open) open.set(idOf(r), r);
+      read += p.count;
     };
+    if (resume) {
+      ({ lastPage, total, nextPage: next } = resume);
+      progress.setTotal("pages", lastPage);
+      progress.tick("pages", next - 1);
+    } else {
+      const first = await fetchPage(1).catch((e: Error) => {
+        // Point at the endpoint only when NetSuite itself answered (access denied / RESTlet error), not for network failures.
+        const fromNetSuite = e instanceof PeakError && (e.status === 403 || /^NetSuite error/.test(e.message));
+        if (!fromNetSuite) throw e;
+        throw new PeakError(e.status, `${e.message} (endpoint #46 ${NS_AR_SERVICE} on ${NS_SCRIPT_2}. If the token's role can't run that RESTlet, ask the NetSuite admin to grant it.)`);
+      });
+      lastPage = Math.min(first.lastPage ?? 1, MAX_PAGES);
+      total = first.total;
+      if ((first.lastPage ?? 1) > MAX_PAGES) warnings.push(`NetSuite reported ${first.lastPage} pages; only the first ${MAX_PAGES} (${MAX_PAGES * 1000} invoices) were read.`);
+      progress.setTotal("pages", lastPage);
+      keep(first);
+      lastIds = first.ids;
+      next = 2;
+    }
+
+    while (next <= lastPage) {
+      if (Date.now() >= deadline) {
+        return { startedAt, nextPage: next, lastPage, total, read, open: [...open.values()] };
+      }
+      const batch = range(next, Math.min(next + concurrency - 1, lastPage));
+      const pages = batch.length === 1 ? [await fetchPage(batch[0])] : await Promise.all(batch.map(fetchPage));
+      pages.forEach(keep);
+      lastIds = pages[pages.length - 1].ids;
+      next += batch.length;
+    }
+    progress.done("pages", `${read.toLocaleString("en-US")} invoices read`);
+    return { rows: [...open.values()], sync: { fullAt: Date.now(), lastPage, total, lastPageIds: lastIds, open: [] } };
   };
 
   // ---- Update: last page + new pages + re-check of last time's open invoices. Returns a reason when it can't. ----
@@ -166,12 +251,12 @@ async function load(
     pageStep = "tail";
     progress.plan([
       { key: "tail", label: "Reading the newest invoices (last page and any new pages)", unit: "pages", total: 1 },
+      { key: "reread", label: "Re-reading the pages that held open invoices", unit: "pages" },
       { key: "recheck", label: "Re-checking invoices that were open last time", unit: "invoices" },
     ]);
     progress.start("tail");
     const tail = await fetchPage(p.lastPage);
-    const tailIds = tail.rows.map(idOf);
-    if (!p.lastPageIds.every((id, i) => tailIds[i] === id)) return `the invoices on page ${p.lastPage} changed, so NetSuite's page order isn't stable`;
+    if (!p.lastPageIds.every((id, i) => tail.ids[i] === id)) return `the invoices on page ${p.lastPage} changed, so NetSuite's page order isn't stable`;
     if (tail.lastPage !== null && tail.lastPage < p.lastPage) return `NetSuite now reports fewer pages (${tail.lastPage}) than last time (${p.lastPage})`;
     if (tail.total !== null && p.total !== null && tail.total < p.total) return `NetSuite now reports fewer invoices (${tail.total}) than last time (${p.total})`;
 
@@ -179,16 +264,39 @@ async function load(
     const lastPage = Math.min(reported, MAX_PAGES);
     if (reported > MAX_PAGES) warnings.push(`NetSuite reported ${reported} pages; only the first ${MAX_PAGES} (${MAX_PAGES * 1000} invoices) were read.`);
     progress.setTotal("tail", 1 + lastPage - p.lastPage);
-    const extra = lastPage > p.lastPage ? await mapLimit(range(p.lastPage + 1, lastPage), CONCURRENCY, fetchPage) : [];
-    const pageRows = [tail, ...extra].flatMap((l) => l.rows);
+    const extra = lastPage > p.lastPage ? await mapLimit(range(p.lastPage + 1, lastPage), concurrency, fetchPage) : [];
+    const newest = [tail, ...extra];
+    const pages = [...newest];
 
     const merged = new Map(p.open.map((r) => [idOf(r), r]));
-    const seen = new Set(pageRows.map(idOf));
+    const seen = new Set(pages.flatMap((pg) => pg.ids));
     // Rows without an internal ID can't be looked up; they are refreshed by the next full read.
-    const recheck = [...merged.keys()].filter((id) => !seen.has(id) && !id.startsWith("doc:"));
+    let recheck = [...merged.keys()].filter((id) => !seen.has(id) && !id.startsWith("doc:"));
+    progress.done("tail");
+
+    // Many open invoices to re-check, on a few pages: re-reading those pages is far quicker than one call each.
+    const byPage = new Map<number, string[]>();
+    for (const id of recheck) {
+      const pg = Number(merged.get(id)?.[PAGE_FIELD]);
+      if (Number.isInteger(pg) && pg >= 1 && pg < p.lastPage) byPage.set(pg, [...(byPage.get(pg) ?? []), id]);
+    }
+    if (recheck.length > FEW_RECHECKS && byPage.size && byPage.size <= MAX_REREAD_PAGES) {
+      const list = [...byPage.keys()].sort((a, b) => a - b);
+      pageStep = "reread";
+      progress.start("reread", list.length);
+      for (const pg of list) {
+        const page = await fetchPage(pg);
+        const ids = new Set(page.ids);
+        // An invoice that was open on this page isn't there any more: the page order changed.
+        if (byPage.get(pg)!.some((id) => !ids.has(id))) return `an open invoice is no longer on page ${pg}, so NetSuite's page order changed`;
+        pages.push(page);
+        for (const id of page.ids) seen.add(id);
+      }
+      progress.done("reread");
+      recheck = recheck.filter((id) => !seen.has(id));
+    } else progress.skip("reread", recheck.length > FEW_RECHECKS ? "open invoices are spread over too many pages" : "few enough to check one by one");
     if (recheck.length > MAX_RECHECK) return `${recheck.length} open invoices would need re-checking one by one (more than ${MAX_RECHECK})`;
 
-    progress.done("tail");
     rechecked = recheck.length;
     if (recheck.length) progress.start("recheck", recheck.length);
     else progress.skip("recheck", "every open invoice was on the pages just read");
@@ -197,39 +305,69 @@ async function load(
       const list = await request({ "query[inv_ns_internal_id]": id }, "ns-recheck", RECHECK_TIMEOUT_MS);
       progress.tick("recheck");
       const row = list.rows.find((r) => idOf(r) === id);
-      if (row) merged.set(id, row);
+      if (row) merged.set(id, { ...trim(row), [PAGE_FIELD]: merged.get(id)?.[PAGE_FIELD] });
       else if (list.rows.length) filterIgnored = true; // got other invoices back: the ID filter didn't apply
       else merged.delete(id); // no longer exists (deleted in NetSuite)
     });
     if (filterIgnored) return "looking up an invoice by inv_ns_internal_id returned other invoices";
     if (recheck.length) progress.done("recheck");
 
-    for (const r of pageRows) merged.set(idOf(r), r);
-    const last = extra.length ? extra[extra.length - 1] : tail;
+    // Invoices on the pages just read: drop them all (paid ones must go), then put back the open ones.
+    for (const pg of pages) for (const id of pg.ids) merged.delete(id);
+    for (const pg of pages) for (const r of pg.open) merged.set(idOf(r), r);
     return {
       rows: [...merged.values()],
-      sync: { fullAt: p.fullAt, lastPage, total: tail.total ?? p.total, lastPageIds: last.rows.map(idOf), open: [] },
+      sync: { fullAt: p.fullAt, lastPage, total: tail.total ?? p.total, lastPageIds: newest[newest.length - 1].ids, open: [] },
     };
   };
 
+  const base = prev && prev.fullAt > 0 ? prev : null;
+  const resume = prev?.partial && Date.now() - prev.partial.startedAt < PARTIAL_MAX_AGE_MS ? prev.partial : null;
+  const fullDue = !base || Date.now() - base.fullAt >= FULL_EVERY_MS || Boolean(prev?.fullRequested) || Boolean(resume);
+  const allowFull = opts.allowFull ?? true;
+  const keepBase = (extra: Pick<NsSyncState, "partial" | "fullRequested">): NsSyncState => ({ ...NO_BASE, ...(base ?? {}), partial: resume, fullRequested: prev?.fullRequested, ...extra });
+
   let result: ReadResult;
   let sync: NsSyncInfo;
-  const fullDue = !prev || Date.now() - prev.fullAt >= FULL_EVERY_MS;
-  const attempt = prev && !fullDue ? await update(prev) : null;
+  const attempt = base && (!fullDue || !allowFull) ? await update(base) : null;
   if (attempt && typeof attempt !== "string") {
     result = attempt;
+    // An update doesn't finish a full read that's due or under way: keep that for the next scheduled pull.
+    result.sync.partial = resume;
+    result.sync.fullRequested = prev?.fullRequested;
     sync = { mode: "update", reason: null, rechecked };
   } else {
-    // Calls made by an abandoned update stay in the Debug list; the progress steps switch to a full read.
-    const reason = typeof attempt === "string" ? `Update not possible: ${attempt}.` : prev ? "Daily full read." : "No earlier read saved.";
-    result = await full(typeof attempt === "string" ? `${reason} Reading everything instead.` : reason === "Daily full read." ? "Once a day every invoice is read again." : null);
+    const reason = typeof attempt === "string" ? `Update not possible: ${attempt}.` : resume ? "Continuing a full read." : base ? "Daily full read." : "No earlier read saved.";
+    if (!allowFull) {
+      const note = `${reason} Every invoice will be read again by the next scheduled pull; the dashboard keeps showing the last saved data until then.`;
+      return { kind: "deferred", note, sync: keepBase({ fullRequested: true }) };
+    }
+    const note = resume
+      ? `Continuing the full read from page ${resume.nextPage} of ${resume.lastPage}.`
+      : typeof attempt === "string"
+        ? `${reason} Reading everything instead.`
+        : reason === "Daily full read."
+          ? "Once a day every invoice is read again."
+          : null;
+    const out = await full(note, resume);
+    if (!("rows" in out)) {
+      const pct = Math.round(((out.nextPage - 1) / out.lastPage) * 100);
+      return {
+        kind: "partial",
+        note: `Full read ${pct}% done (pages 1–${out.nextPage - 1} of ${out.lastPage}); it continues on the next scheduled pull.`,
+        sync: keepBase({ partial: out, fullRequested: prev?.fullRequested }),
+      };
+    }
+    result = out;
+    result.sync.partial = null;
+    result.sync.fullRequested = false;
     sync = { mode: "full", reason, rechecked: 0 };
   }
 
   const built = build(conn, entities, result.rows, calls, warnings);
   result.sync.open = built.openRows;
   built.data.debug.sync = { ...sync, fullAt: new Date(result.sync.fullAt).toISOString(), pagesRead: calls.filter((c) => c.purpose === "ns-invoices").length };
-  return { data: built.data, sync: result.sync };
+  return { kind: "done", data: built.data, sync: result.sync };
 }
 
 /** Remaining amount of an invoice still open, or null when it's paid, void or fully applied. */
@@ -321,7 +459,8 @@ const idOf = (r: Json) => str(r.inv_ns_internal_id) || `doc:${str(r.inv_doc_numb
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
 
 /** Fields kept for open invoices between reads (line items and addresses are dropped). */
-const KEEP_FIELDS = ["inv_url_link_printform_inc_vat", "apply_customerdeposit", "payment_query"];
+const PAGE_FIELD = "__page";
+const KEEP_FIELDS = ["inv_url_link_printform_inc_vat", "apply_customerdeposit", "payment_query", PAGE_FIELD];
 function trim(r: Json): Json {
   const out: Json = {};
   for (const f of [...RAW_FIELDS, ...KEEP_FIELDS]) if (r[f] !== undefined) out[f] = r[f];
