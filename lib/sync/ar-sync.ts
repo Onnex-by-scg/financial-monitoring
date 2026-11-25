@@ -181,6 +181,8 @@ export async function readAr(entityId: string | null, opts: { refresh?: boolean 
     }
   } else if (opts.refresh) {
     await runPull(() => syncEntity(target, entities, "refresh")); // background, or waited for on Workers (run-pull.ts)
+    // On Workers the pull has finished by now: read the snapshot again, so the answer's "data from" time is the new one.
+    snap = (await db.arSnapshot.findUnique({ where: { entityId: target.id } })) ?? snap;
   }
 
   const [rows, lastRun, lastNote, debugText] = await Promise.all([
