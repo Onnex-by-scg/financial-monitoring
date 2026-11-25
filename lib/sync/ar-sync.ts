@@ -1,7 +1,7 @@
 import "server-only";
 import { runPull } from "./run-pull";
 import type { ArDebug, ArEntity, ArInvoice, ArResponse, ArSource, ProjectInfo } from "../ar";
-import { db } from "../db";
+import { db, releaseDb, withDb } from "../db";
 import { loadNetSuiteAr, nsCredKey, type NsSyncState } from "../netsuite/ar-source";
 import { getArData as getPeakAr } from "../peak/ar-source";
 import { hash, PeakError, type Company } from "../peak/client";
@@ -63,12 +63,15 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
     let mode: string | null = null;
     const pacing = await getFetchPacing(); // Settings → Data sync: PEAK page size, wait between pages
     if (target.provider === "peak") {
+      await releaseDb(); // don't hold a connection open while PEAK answers (lib/db.ts)
       data = await getPeakAr(target.id, true, progress, pacing);
     } else {
       const stateKey = `ns:${target.id}`;
       const saved = await db.syncState.findUnique({ where: { key: stateKey } });
       const parsed = saved ? (JSON.parse(saved.value) as { credKey: string; state: NsSyncState }) : null;
       const prev = parsed?.credKey === target.credKey ? parsed.state : null;
+      // NetSuite can take minutes to answer; a database connection left idle that long gets dropped (lib/db.ts).
+      await releaseDb();
       const result = await loadNetSuiteAr(target.conn, entities, prev, progress, {
         pageWaitMs: pacing.pageWaitMs,
         // Workers: one 1,000-invoice page in memory at a time, and full reads split over runs that fit the limits.
@@ -78,13 +81,15 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
         allowFull: !ON_WORKERS || trigger !== "refresh",
       });
       const value = JSON.stringify({ credKey: target.credKey, state: result.sync });
-      await db.syncState.upsert({ where: { key: stateKey }, create: { key: stateKey, value }, update: { value } });
+      await withDb(() => db.syncState.upsert({ where: { key: stateKey }, create: { key: stateKey, value }, update: { value } }));
       if (result.kind !== "done") {
         // Nothing new to show yet: keep the saved snapshot, and say why in the pull history.
-        await db.syncRun.update({
-          where: { id: run.id },
-          data: { status: result.kind === "partial" ? "partial" : "skipped", mode: result.kind === "partial" ? "full" : null, finishedAt: new Date(), note: result.note },
-        });
+        await withDb(() =>
+          db.syncRun.update({
+            where: { id: run.id },
+            data: { status: result.kind === "partial" ? "partial" : "skipped", mode: result.kind === "partial" ? "full" : null, finishedAt: new Date(), note: result.note },
+          }),
+        );
         progress.skip(SAVE_STEP, result.note);
         return;
       }
@@ -92,16 +97,18 @@ async function runSync(target: Target, entities: ArEntity[], trigger: SyncTrigge
       mode = result.data.debug.sync?.mode ?? null;
     }
     progress.start(SAVE_STEP, data.invoices.length);
-    await saveSnapshot(target, data);
+    await withDb(() => saveSnapshot(target, data));
     progress.tick(SAVE_STEP, data.invoices.length);
     progress.done(SAVE_STEP, `${data.invoices.length.toLocaleString("en-US")} open invoices saved`);
-    await db.syncRun.update({ where: { id: run.id }, data: { status: "ok", mode, finishedAt: new Date(), invoices: data.invoices.length } });
+    await withDb(() => db.syncRun.update({ where: { id: run.id }, data: { status: "ok", mode, finishedAt: new Date(), invoices: data.invoices.length } }));
   } catch (e) {
     const err = e as Error;
-    await db.syncRun.update({
-      where: { id: run.id },
-      data: { status: "error", finishedAt: new Date(), error: err.message, errorStatus: e instanceof PeakError ? e.status : null },
-    });
+    await withDb(() =>
+      db.syncRun.update({
+        where: { id: run.id },
+        data: { status: "error", finishedAt: new Date(), error: err.message, errorStatus: e instanceof PeakError ? e.status : null },
+      }),
+    );
     throw e;
   } finally {
     progress.finish();

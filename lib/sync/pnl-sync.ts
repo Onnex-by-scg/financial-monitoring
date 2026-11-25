@@ -1,7 +1,7 @@
 import "server-only";
 import { runPull } from "./run-pull";
 import { bangkokToday } from "../ar";
-import { db } from "../db";
+import { db, withDb } from "../db";
 import { BASE_URLS, PeakError } from "../peak/client";
 import { readTrialBalanceMonth } from "../peak/pnl-source";
 import { monthsFor, type PnlAccount, type PnlLine, type PnlMonth, type PnlResponse } from "../pnl";
@@ -90,26 +90,28 @@ async function runPnl(target: PeakTarget, trigger: SyncTrigger, year: number | n
     for (const ym of months) {
       const m = await readTrialBalanceMonth(target.company, ym); // stops at the first failure: the rest would fail the same way
       const row = { credKey: target.credKey, totals: JSON.stringify(m.totals), accounts: JSON.stringify(m.accounts), fetchedAt: new Date() };
-      await db.pnlMonth.upsert({ where: { entityId_month: { entityId: target.id, month: ym } }, create: { entityId: target.id, month: ym, ...row }, update: row });
+      await withDb(() => db.pnlMonth.upsert({ where: { entityId_month: { entityId: target.id, month: ym } }, create: { entityId: target.id, month: ym, ...row }, update: row }));
       saved++;
       progress.tick("months");
     }
     progress.done("months");
     progress.start(SAVE_STEP);
     progress.done(SAVE_STEP, `${saved} months saved`);
-    await db.syncRun.update({ where: { id: run.id }, data: { status: "ok", finishedAt: new Date(), note: `${saved} month${saved === 1 ? "" : "s"}` } });
+    await withDb(() => db.syncRun.update({ where: { id: run.id }, data: { status: "ok", finishedAt: new Date(), note: `${saved} month${saved === 1 ? "" : "s"}` } }));
   } catch (e) {
     const err = e as Error;
-    await db.syncRun.update({
-      where: { id: run.id },
-      data: {
-        status: "error",
-        finishedAt: new Date(),
-        error: err.message,
-        errorStatus: e instanceof PeakError ? e.status : null,
-        note: saved ? `${saved} of ${months.length} months saved` : null,
-      },
-    });
+    await withDb(() =>
+      db.syncRun.update({
+        where: { id: run.id },
+        data: {
+          status: "error",
+          finishedAt: new Date(),
+          error: err.message,
+          errorStatus: e instanceof PeakError ? e.status : null,
+          note: saved ? `${saved} of ${months.length} months saved` : null,
+        },
+      }),
+    );
     throw e;
   } finally {
     progress.finish();

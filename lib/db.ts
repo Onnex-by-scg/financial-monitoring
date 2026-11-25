@@ -91,6 +91,35 @@ const workersDatabase = new Proxy({} as PrismaClient, {
   },
 });
 
+/**
+ * Cloudflare Workers: closes this request's database connection, so the next query opens a fresh one.
+ * Called before a long NetSuite / PEAK read: a connection left idle for that long can be closed by the network or
+ * Supabase's pooler, and the first query after the read then fails with "Connection terminated unexpectedly".
+ * Does nothing on a Node server (its pool replaces dead connections itself).
+ */
+export async function releaseDb(): Promise<void> {
+  if (!ON_WORKERS || SAMPLE_MODE) return;
+  const { ctx } = getCloudflareContext();
+  const client = perRequest.get(ctx as object);
+  if (!client) return;
+  perRequest.delete(ctx as object);
+  await client.$disconnect().catch(() => undefined);
+}
+
+const DROPPED = /Connection terminated|ECONNRESET|connection (was )?closed|Socket closed|server closed the connection/i;
+
+/** Runs a database step, and once more on a fresh connection if the connection had been dropped. */
+export async function withDb<T>(step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (e) {
+    if (!ON_WORKERS || !DROPPED.test((e as Error).message ?? "")) throw e;
+    console.warn(`[db] connection dropped (${(e as Error).message}); retrying on a new connection`);
+    await releaseDb();
+    return step();
+  }
+}
+
 const g = globalThis as { __prisma?: PrismaClient };
 
 export const db: PrismaClient = SAMPLE_MODE ? noDatabase : ON_WORKERS ? workersDatabase : (g.__prisma ??= createClient());
